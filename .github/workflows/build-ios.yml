@@ -1,0 +1,54 @@
+name: Build iOS IPA (Zero-Mac Cloud Pipeline)
+
+on:
+  workflow_dispatch: # Allows manual trigger from GitHub UI
+  push:
+    branches:
+      - main
+
+jobs:
+  build-ios:
+    name: Build Unsigned iOS IPA
+    runs-on: macos-14 # Free Apple Silicon macOS runner on GitHub Actions
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 📦 Install dependencies
+        run: npm install
+
+      - name: ⚙️ Generate Native Xcode Project with Keyboard Plugin
+        run: npx expo prebuild --platform ios --clean
+
+      - name: 🔨 Compile Xcode Archive (No Signing Required)
+        run: |
+          xcodebuild -workspace ios/WriteFlow.xcworkspace \
+            -scheme WriteFlow \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/WriteFlow.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            archive
+
+      - name: 📦 Package App into IPA
+        run: |
+          mkdir -p build/Payload
+          cp -r build/WriteFlow.xcarchive/Products/Applications/WriteFlow.app build/Payload/
+          cd build
+          zip -r WriteFlow.ipa Payload
+
+      - name: 🚀 Upload Installable IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WriteFlow-iOS-IPA
+          path: build/WriteFlow.ipa
+          retention-days: 14

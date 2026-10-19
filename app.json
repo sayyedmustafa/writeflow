@@ -1,25 +1,39 @@
 {
   "expo": {
-    "name": "writing-assistant",
-    "slug": "writing-assistant",
+    "name": "WriteFlow",
+    "slug": "writeflow-assistant",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.writeflow.assistant",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#0F172A",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
+      "package": "com.writeflow.assistant",
       "predictiveBackGestureEnabled": false
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-status-bar",
+      "./plugins/withKeyboardExtension"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "771cf293-d648-4163-a803-97ce12c91122"
+      }
     }
   }
 }
