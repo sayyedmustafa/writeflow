@@ -20,12 +20,37 @@ function withMainAppEntitlements(config) {
   });
 }
 
+// Helper to patch Swift tools version for Xcode 16.2
+function patchSwiftToolsVersion(projectRoot) {
+  const nodeModules = path.join(projectRoot, 'node_modules');
+  if (!fs.existsSync(nodeModules)) return;
+  const filesToPatch = [
+    path.join(nodeModules, '@expo', 'expo-modules-macros-plugin', 'apple', 'Package.swift'),
+    path.join(nodeModules, 'expo-modules-jsi', 'apple', 'Package.swift')
+  ];
+  filesToPatch.forEach(file => {
+    if (fs.existsSync(file)) {
+      try {
+        let content = fs.readFileSync(file, 'utf8');
+        if (content.includes('swift-tools-version: 6.2')) {
+          fs.writeFileSync(file, content.replace(/swift-tools-version: 6\.2/g, 'swift-tools-version: 6.0'));
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+  });
+}
+
 // 2. Add Native Keyboard Extension target to Xcode project
 function withKeyboardTarget(config) {
   return withXcodeProject(config, (mod) => {
     const xcodeProject = mod.modResults;
     const projectRoot = mod.modRequest.projectRoot;
     const platformProjectRoot = mod.modRequest.platformProjectRoot;
+
+    // Fix Swift 6.2 tools version incompatibility with Xcode 16.2
+    patchSwiftToolsVersion(projectRoot);
 
     const sourceDir = path.join(projectRoot, 'plugins', 'keyboard-extension', 'ios');
     const targetDir = path.join(platformProjectRoot, EXTENSION_NAME);

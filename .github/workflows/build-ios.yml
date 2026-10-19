@@ -27,7 +27,9 @@ jobs:
           cache: npm
 
       - name: 📦 Install dependencies
-        run: npm install
+        run: |
+          npm install
+          find node_modules -name "Package.swift" -exec sed -i '' 's/swift-tools-version: 6.2/swift-tools-version: 6.0/g' {} + || true
 
       - name: ⚙️ Generate Native Xcode Project with Keyboard Plugin
         run: npx expo prebuild --platform ios --clean
