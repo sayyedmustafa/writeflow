@@ -1,4 +1,4 @@
-name: Build iOS IPA (Zero-Mac Cloud Pipeline)
+name: Build iOS IPA (Pure Native Swift Pipeline)
 
 on:
   workflow_dispatch:
@@ -15,43 +15,19 @@ jobs:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
-      - name: 🍏 Select Xcode 16.4
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: '16.4'
+      - name: 🍏 Install XcodeGen
+        run: brew install xcodegen
 
-      - name: 🔍 Verify Xcode & Swift Version
-        run: |
-          xcodebuild -version
-          swift --version
-
-      - name: 🟢 Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: 📦 Install dependencies
-        run: |
-          npm install
-          node patch-package-swift.js
-
-      - name: ⚙️ Generate Native Xcode Project with Keyboard Plugin
-        run: |
-          npx expo prebuild --platform ios --clean
-          node patch-package-swift.js
+      - name: ⚙️ Generate Native Xcode Project
+        run: xcodegen generate
 
       - name: 🔨 Compile Xcode Archive (No Signing Required)
         run: |
-          find ios -name "Package.swift" -delete 2>/dev/null || true
-          rm -rf ios/*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm 2>/dev/null || true
-          rm -rf ios/*.xcworkspace/xcshareddata/swiftpm 2>/dev/null || true
-          xcodebuild -workspace ios/WriteFlow.xcworkspace \
+          xcodebuild -project WriteFlow.xcodeproj \
             -scheme WriteFlow \
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -archivePath build/WriteFlow.xcarchive \
-            -disableAutomaticPackageResolution \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
