@@ -18,14 +18,10 @@
     "typescript": "~6.0.3"
   },
   "scripts": {
-    "postinstall": "node patch-package-swift.js",
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web"
   },
-  "private": true,
-  "overrides": {
-    "expo-modules-jsi": "57.0.8"
-  }
+  "private": true
 }
