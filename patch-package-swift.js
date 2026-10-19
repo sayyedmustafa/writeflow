@@ -6,10 +6,13 @@ function patchSwiftFile(filePath) {
   let content = fs.readFileSync(filePath, 'utf8');
   let modified = false;
 
-  // Fix: Swift 6.1 requires weak variables to be 'var' (since they can become nil)
-  if (content.includes('weak let')) {
-    content = content.replace(/\bweak\s+let\b/g, 'weak var');
-    modified = true;
+  // Fix: Swift 6 concurrency requires weak vars in Sendable classes to be marked nonisolated(unsafe)
+  if (content.match(/weak\s+(let|var)\s+runtime/)) {
+    const updated = content.replace(/(nonisolated\(unsafe\)\s*)?weak\s+(let|var)\s+runtime/g, 'nonisolated(unsafe) weak var runtime');
+    if (updated !== content) {
+      content = updated;
+      modified = true;
+    }
   }
 
   // Fix: Remove trailing comma in tuple parameter types for Swift 6.1
@@ -20,7 +23,7 @@ function patchSwiftFile(filePath) {
 
   if (modified) {
     fs.writeFileSync(filePath, content, 'utf8');
-    console.log('Successfully patched Swift file for Swift 6.1 compatibility:', filePath);
+    console.log('Successfully patched Swift file for Swift 6.1 concurrency:', filePath);
   }
 }
 
