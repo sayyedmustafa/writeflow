@@ -2,7 +2,7 @@ import UIKit
 
 class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
 
-    // Audio click feedback for native iOS feel
+    // MARK: - Native iOS Audio Click Feedback
     var enableInputClicksWhenVisible: Bool {
         return true
     }
@@ -15,14 +15,20 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
     private let primaryEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent"
     private let fallbackEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent"
 
-    // MARK: - UI Components (Grammarly-Style Assistant Toolbar)
+    // MARK: - UI Components
     private var toolbarContainer: UIView!
+    private var hairline: UIView!
     private var grammarlyLogoButton: UIButton!
     private var grammarlyStatusBadge: UILabel!
     private var activitySpinner: UIActivityIndicatorView!
     private var suggestionsScrollView: UIScrollView!
     private var suggestionsStackView: UIStackView!
     private var keyboardView: UIView!
+
+    // Key collections for dynamic theming
+    private var normalButtons: [UIButton] = []
+    private var specialButtons: [UIButton] = []
+    private var shiftButton: UIButton?
 
     // MARK: - Haptic Feedback Generators
     private let lightHaptic = UIImpactFeedbackGenerator(style: .light)
@@ -44,17 +50,63 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
     private var currentFlawedSentence: String?
     private var isChecking = false
 
-    // Color Palette matching Native iOS Dark Keyboard & Grammarly
-    private let keyboardBgColor = UIColor(red: 0.11, green: 0.11, blue: 0.12, alpha: 1.0)
-    private let normalKeyColor = UIColor(red: 0.38, green: 0.38, blue: 0.40, alpha: 1.0)
-    private let normalKeyHighlightColor = UIColor(red: 0.58, green: 0.58, blue: 0.60, alpha: 1.0)
-    private let specialKeyColor = UIColor(red: 0.21, green: 0.21, blue: 0.22, alpha: 1.0)
-    private let specialKeyHighlightColor = UIColor(red: 0.34, green: 0.34, blue: 0.36, alpha: 1.0)
-    
+    private var heightConstraint: NSLayoutConstraint?
+
+    // MARK: - Dynamic iOS & Grammarly Theme
+    private var isDarkMode: Bool {
+        return traitCollection.userInterfaceStyle == .dark
+    }
+
+    // Authentic iOS Keyboard Background Colors
+    private var keyboardBgColor: UIColor {
+        return isDarkMode ? UIColor(red: 0.11, green: 0.11, blue: 0.12, alpha: 1.0) : UIColor(red: 0.82, green: 0.835, blue: 0.855, alpha: 1.0)
+    }
+
+    // Authentic iOS Key Colors
+    private var normalKeyColor: UIColor {
+        return isDarkMode ? UIColor(white: 0.38, alpha: 1.0) : UIColor.white
+    }
+
+    private var normalKeyHighlightColor: UIColor {
+        return isDarkMode ? UIColor(white: 0.58, alpha: 1.0) : UIColor(red: 0.72, green: 0.73, blue: 0.76, alpha: 1.0)
+    }
+
+    private var normalKeyTextColor: UIColor {
+        return isDarkMode ? UIColor.white : UIColor.black
+    }
+
+    private var specialKeyColor: UIColor {
+        return isDarkMode ? UIColor(white: 0.22, alpha: 1.0) : UIColor(red: 0.68, green: 0.70, blue: 0.74, alpha: 1.0)
+    }
+
+    private var specialKeyHighlightColor: UIColor {
+        return isDarkMode ? UIColor(white: 0.34, alpha: 1.0) : UIColor(white: 0.88, alpha: 1.0)
+    }
+
+    private var specialKeyTextColor: UIColor {
+        return isDarkMode ? UIColor.white : UIColor.black
+    }
+
+    private var keyShadowColor: UIColor {
+        return isDarkMode ? UIColor.black : UIColor(red: 0.53, green: 0.54, blue: 0.57, alpha: 1.0)
+    }
+
+    private var keyShadowOpacity: Float {
+        return isDarkMode ? 0.45 : 1.0
+    }
+
     // Grammarly Branding Colors
-    private let grammarlyGreen = UIColor(red: 0.08, green: 0.72, blue: 0.52, alpha: 1.0)
-    private let grammarlyCoral = UIColor(red: 0.98, green: 0.38, blue: 0.38, alpha: 1.0)
-    private let grammarlyBlue = UIColor(red: 0.10, green: 0.55, blue: 0.98, alpha: 1.0)
+    private let grammarlyGreen = UIColor(red: 0.0, green: 0.788, blue: 0.46, alpha: 1.0) // Iconic #00C975
+    private let grammarlyCoral = UIColor(red: 1.0, green: 0.32, blue: 0.32, alpha: 1.0) // Error red #FF5252
+    private let grammarlyBlue = UIColor(red: 0.0, green: 0.48, blue: 1.0, alpha: 1.0)   // iOS Blue #007AFF
+
+    private var toolbarBgColor: UIColor {
+        return isDarkMode ? UIColor(red: 0.14, green: 0.14, blue: 0.16, alpha: 1.0) : UIColor(red: 0.88, green: 0.89, blue: 0.91, alpha: 1.0)
+    }
+
+    private var hairlineColor: UIColor {
+        return isDarkMode ? UIColor(white: 0.22, alpha: 1.0) : UIColor(white: 0.72, alpha: 1.0)
+    }
 
     // Dedicated Network Session with Cellular & Connectivity Guarantee
     private lazy var networkSession: URLSession = {
@@ -77,7 +129,20 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        setupHeightConstraint()
         checkCurrentContext(immediate: true)
+    }
+
+    override func updateViewConstraints() {
+        super.updateViewConstraints()
+        setupHeightConstraint()
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        if traitCollection.hasDifferentColorAppearance(comparedTo: previousTraitCollection) {
+            applyTheme()
+        }
     }
 
     override func textDidChange(_ textInput: UITextInput?) {
@@ -85,49 +150,61 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
         debounceAnalysis(immediate: false)
     }
 
-    // MARK: - UI Setup (Exact Grammarly Keyboard Architecture)
+    // MARK: - Height Management (Prevents UIKit from crushing the keyboard)
+    private func setupHeightConstraint() {
+        let desiredHeight: CGFloat = 280.0 // 44pt toolbar + 6pt gap + 216pt keyboard rows + 14pt bottom padding
+        if heightConstraint == nil {
+            heightConstraint = view.heightAnchor.constraint(equalToConstant: desiredHeight)
+            heightConstraint?.priority = UILayoutPriority(999)
+            heightConstraint?.isActive = true
+        } else if heightConstraint?.constant != desiredHeight {
+            heightConstraint?.constant = desiredHeight
+        }
+    }
+
+    // MARK: - UI Setup
     private func setupUI() {
         view.backgroundColor = keyboardBgColor
 
-        // 1. Top Grammarly Assistant Strip (Height 46pt)
+        // 1. Top Grammarly Assistant Strip (Height 42pt)
         toolbarContainer = UIView()
         toolbarContainer.translatesAutoresizingMaskIntoConstraints = false
-        toolbarContainer.backgroundColor = UIColor(red: 0.13, green: 0.13, blue: 0.15, alpha: 1.0)
-        
-        let hairline = UIView()
-        hairline.translatesAutoresizingMaskIntoConstraints = false
-        hairline.backgroundColor = UIColor(white: 0.22, alpha: 1.0)
-        toolbarContainer.addSubview(hairline)
+        toolbarContainer.backgroundColor = toolbarBgColor
         view.addSubview(toolbarContainer)
 
-        // 2. Circular Grammarly Logo Widget on the Left (Interactive)
+        hairline = UIView()
+        hairline.translatesAutoresizingMaskIntoConstraints = false
+        hairline.backgroundColor = hairlineColor
+        toolbarContainer.addSubview(hairline)
+
+        // 2. Circular Grammarly Logo Widget (Solid Green Circle with White "G")
         grammarlyLogoButton = UIButton(type: .custom)
         grammarlyLogoButton.translatesAutoresizingMaskIntoConstraints = false
-        grammarlyLogoButton.layer.cornerRadius = 16
-        grammarlyLogoButton.layer.borderWidth = 1.5
-        grammarlyLogoButton.layer.borderColor = grammarlyGreen.cgColor
-        grammarlyLogoButton.backgroundColor = UIColor(white: 0.18, alpha: 1.0)
+        grammarlyLogoButton.layer.cornerRadius = 15
+        grammarlyLogoButton.layer.masksToBounds = true
+        grammarlyLogoButton.backgroundColor = grammarlyGreen
         grammarlyLogoButton.setTitle("G", for: .normal)
-        grammarlyLogoButton.setTitleColor(grammarlyGreen, for: .normal)
-        grammarlyLogoButton.titleLabel?.font = UIFont.systemFont(ofSize: 15, weight: .black)
+        grammarlyLogoButton.setTitleColor(.white, for: .normal)
+        grammarlyLogoButton.titleLabel?.font = UIFont.systemFont(ofSize: 16, weight: .black)
         grammarlyLogoButton.addTarget(self, action: #selector(grammarlyLogoTapped), for: .touchUpInside)
         toolbarContainer.addSubview(grammarlyLogoButton)
 
-        // Error Badge Counter on Logo (like Grammarly)
+        // Error Badge Counter on Logo
         grammarlyStatusBadge = UILabel()
         grammarlyStatusBadge.translatesAutoresizingMaskIntoConstraints = false
-        grammarlyStatusBadge.layer.cornerRadius = 7
+        grammarlyStatusBadge.layer.cornerRadius = 7.5
         grammarlyStatusBadge.layer.masksToBounds = true
         grammarlyStatusBadge.backgroundColor = grammarlyCoral
         grammarlyStatusBadge.textColor = .white
-        grammarlyStatusBadge.font = UIFont.systemFont(ofSize: 9, weight: .bold)
+        grammarlyStatusBadge.font = UIFont.systemFont(ofSize: 9.5, weight: .bold)
         grammarlyStatusBadge.textAlignment = .center
         grammarlyStatusBadge.isHidden = true
         toolbarContainer.addSubview(grammarlyStatusBadge)
 
+        // White Spinner inside Logo when checking
         activitySpinner = UIActivityIndicatorView(style: .medium)
         activitySpinner.translatesAutoresizingMaskIntoConstraints = false
-        activitySpinner.color = grammarlyGreen
+        activitySpinner.color = .white
         activitySpinner.hidesWhenStopped = true
         toolbarContainer.addSubview(activitySpinner)
 
@@ -144,7 +221,7 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
         suggestionsStackView.alignment = .center
         suggestionsScrollView.addSubview(suggestionsStackView)
 
-        // 4. Native iOS QWERTY Keypad
+        // 4. Native iOS QWERTY Keypad Container
         keyboardView = UIView()
         keyboardView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(keyboardView)
@@ -154,7 +231,7 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
             toolbarContainer.topAnchor.constraint(equalTo: view.topAnchor),
             toolbarContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             toolbarContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            toolbarContainer.heightAnchor.constraint(equalToConstant: 46),
+            toolbarContainer.heightAnchor.constraint(equalToConstant: 42),
 
             hairline.leadingAnchor.constraint(equalTo: toolbarContainer.leadingAnchor),
             hairline.trailingAnchor.constraint(equalTo: toolbarContainer.trailingAnchor),
@@ -163,13 +240,13 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
 
             grammarlyLogoButton.leadingAnchor.constraint(equalTo: toolbarContainer.leadingAnchor, constant: 10),
             grammarlyLogoButton.centerYAnchor.constraint(equalTo: toolbarContainer.centerYAnchor),
-            grammarlyLogoButton.widthAnchor.constraint(equalToConstant: 32),
-            grammarlyLogoButton.heightAnchor.constraint(equalToConstant: 32),
+            grammarlyLogoButton.widthAnchor.constraint(equalToConstant: 30),
+            grammarlyLogoButton.heightAnchor.constraint(equalToConstant: 30),
 
             grammarlyStatusBadge.topAnchor.constraint(equalTo: grammarlyLogoButton.topAnchor, constant: -3),
             grammarlyStatusBadge.trailingAnchor.constraint(equalTo: grammarlyLogoButton.trailingAnchor, constant: 4),
-            grammarlyStatusBadge.widthAnchor.constraint(greaterThanOrEqualToConstant: 14),
-            grammarlyStatusBadge.heightAnchor.constraint(equalToConstant: 14),
+            grammarlyStatusBadge.widthAnchor.constraint(greaterThanOrEqualToConstant: 15),
+            grammarlyStatusBadge.heightAnchor.constraint(equalToConstant: 15),
 
             activitySpinner.centerXAnchor.constraint(equalTo: grammarlyLogoButton.centerXAnchor),
             activitySpinner.centerYAnchor.constraint(equalTo: grammarlyLogoButton.centerYAnchor),
@@ -188,7 +265,6 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
             keyboardView.topAnchor.constraint(equalTo: toolbarContainer.bottomAnchor, constant: 6),
             keyboardView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 3),
             keyboardView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -3),
-            keyboardView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -4),
             keyboardView.heightAnchor.constraint(equalToConstant: 216)
         ])
 
@@ -196,11 +272,36 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
         showDefaultAssistantPrompt()
     }
 
+    private func applyTheme() {
+        view.backgroundColor = keyboardBgColor
+        toolbarContainer.backgroundColor = toolbarBgColor
+        hairline.backgroundColor = hairlineColor
+
+        for btn in normalButtons {
+            btn.backgroundColor = normalKeyColor
+            btn.setTitleColor(normalKeyTextColor, for: .normal)
+            btn.layer.shadowColor = keyShadowColor.cgColor
+            btn.layer.shadowOpacity = keyShadowOpacity
+        }
+
+        for btn in specialButtons {
+            btn.backgroundColor = specialKeyColor
+            btn.setTitleColor(specialKeyTextColor, for: .normal)
+            btn.tintColor = specialKeyTextColor
+            btn.layer.shadowColor = keyShadowColor.cgColor
+            btn.layer.shadowOpacity = keyShadowOpacity
+        }
+
+        if isShifted || isCapsLock {
+            shiftButton?.backgroundColor = isDarkMode ? UIColor(white: 0.90, alpha: 1.0) : UIColor.white
+            shiftButton?.tintColor = UIColor.black
+        }
+    }
+
     private func showDefaultAssistantPrompt() {
         clearSuggestions()
         setLogoState(mode: .clean)
 
-        // Check if user has an API key in clipboard that they can paste with 1 tap
         checkClipboardForApiKey()
 
         if !hasFullAccess {
@@ -210,7 +311,6 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
             label.font = UIFont.systemFont(ofSize: 12, weight: .semibold)
             suggestionsStackView.addArrangedSubview(label)
         } else {
-            // Clean state Grammarly tone pills
             addTonePill(title: "✨ All Clear", isStatic: true)
             addTonePill(title: "👔 Professional", tone: "Professional")
             addTonePill(title: "⚡ Shorten", tone: "Concise")
@@ -237,26 +337,23 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
         case .clean:
             activitySpinner.stopAnimating()
             grammarlyLogoButton.setTitle("G", for: .normal)
-            grammarlyLogoButton.layer.borderColor = grammarlyGreen.cgColor
-            grammarlyLogoButton.setTitleColor(grammarlyGreen, for: .normal)
+            grammarlyLogoButton.backgroundColor = grammarlyGreen
             grammarlyStatusBadge.isHidden = true
         case .checking:
             grammarlyLogoButton.setTitle("", for: .normal)
+            grammarlyLogoButton.backgroundColor = grammarlyGreen
             activitySpinner.startAnimating()
-            grammarlyLogoButton.layer.borderColor = grammarlyBlue.cgColor
             grammarlyStatusBadge.isHidden = true
         case .errors(let count):
             activitySpinner.stopAnimating()
             grammarlyLogoButton.setTitle("G", for: .normal)
-            grammarlyLogoButton.layer.borderColor = grammarlyCoral.cgColor
-            grammarlyLogoButton.setTitleColor(grammarlyCoral, for: .normal)
+            grammarlyLogoButton.backgroundColor = grammarlyGreen
             grammarlyStatusBadge.text = "\(count)"
             grammarlyStatusBadge.isHidden = false
         case .offline:
             activitySpinner.stopAnimating()
             grammarlyLogoButton.setTitle("!", for: .normal)
-            grammarlyLogoButton.layer.borderColor = UIColor.systemYellow.cgColor
-            grammarlyLogoButton.setTitleColor(UIColor.systemYellow, for: .normal)
+            grammarlyLogoButton.backgroundColor = UIColor.systemOrange
             grammarlyStatusBadge.isHidden = true
         }
     }
@@ -288,188 +385,247 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
         suggestionsStackView.addArrangedSubview(importBtn)
     }
 
-    // MARK: - Keypad Generation (Exact iPhone Geometry & SF Symbols)
+    // MARK: - 100% Authentic iOS Keypad Builder (Mathematical Alignment)
     private func buildKeys() {
+        normalButtons.removeAll()
+        specialButtons.removeAll()
+        shiftButton = nil
+
         for subview in keyboardView.subviews {
             subview.removeFromSuperview()
         }
 
         let isUpper = isShifted || isCapsLock
-        let row1Letters: [String]
-        let row2Letters: [String]
-        let row3Letters: [String]
+        let row1Keys: [String]
+        let row2Keys: [String]
+        let row3Keys: [String]
 
         if isSymbolMode {
             if isAltSymbolMode {
-                row1Letters = ["[", "]", "{", "}", "#", "%", "^", "*", "+", "="]
-                row2Letters = ["_", "\\", "|", "~", "<", ">", "€", "£", "¥", "•"]
-                row3Letters = [".", ",", "?", "!", "'"]
+                row1Keys = ["[", "]", "{", "}", "#", "%", "^", "*", "+", "="]
+                row2Keys = ["_", "\\", "|", "~", "<", ">", "€", "£", "¥", "•"]
+                row3Keys = [".", ",", "?", "!", "'"]
             } else {
-                row1Letters = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
-                row2Letters = ["-", "/", ":", ";", "(", ")", "$", "&", "@", "\""]
-                row3Letters = [".", ",", "?", "!", "'"]
+                row1Keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+                row2Keys = ["-", "/", ":", ";", "(", ")", "$", "&", "@", "\""]
+                row3Keys = [".", ",", "?", "!", "'"]
             }
         } else {
-            row1Letters = isUpper ? ["Q","W","E","R","T","Y","U","I","O","P"] : ["q","w","e","r","t","y","u","i","o","p"]
-            row2Letters = isUpper ? ["A","S","D","F","G","H","J","K","L"] : ["a","s","d","f","g","h","j","k","l"]
-            row3Letters = isUpper ? ["Z","X","C","V","B","N","M"] : ["z","x","c","v","b","n","m"]
+            row1Keys = isUpper ? ["Q","W","E","R","T","Y","U","I","O","P"] : ["q","w","e","r","t","y","u","i","o","p"]
+            row2Keys = isUpper ? ["A","S","D","F","G","H","J","K","L"] : ["a","s","d","f","g","h","j","k","l"]
+            row3Keys = isUpper ? ["Z","X","C","V","B","N","M"] : ["z","x","c","v","b","n","m"]
         }
 
         let mainStack = UIStackView()
         mainStack.translatesAutoresizingMaskIntoConstraints = false
         mainStack.axis = .vertical
         mainStack.distribution = .fillEqually
-        mainStack.spacing = 8
+        mainStack.spacing = 10 // Exact Apple vertical row gap!
         keyboardView.addSubview(mainStack)
 
         NSLayoutConstraint.activate([
-            mainStack.topAnchor.constraint(equalTo: keyboardView.topAnchor),
-            mainStack.bottomAnchor.constraint(equalTo: keyboardView.bottomAnchor),
-            mainStack.leadingAnchor.constraint(equalTo: keyboardView.leadingAnchor),
-            mainStack.trailingAnchor.constraint(equalTo: keyboardView.trailingAnchor)
+            mainStack.topAnchor.constraint(equalTo: keyboardView.topAnchor, constant: 4),
+            mainStack.bottomAnchor.constraint(equalTo: keyboardView.bottomAnchor, constant: -4),
+            mainStack.leadingAnchor.constraint(equalTo: keyboardView.leadingAnchor, constant: 3),
+            mainStack.trailingAnchor.constraint(equalTo: keyboardView.trailingAnchor, constant: -3)
         ])
 
-        // Row 1 (10 Keys)
-        mainStack.addArrangedSubview(createRow(keys: row1Letters))
+        // --- ROW 1 (10 Keys) ---
+        let row1Stack = UIStackView()
+        row1Stack.axis = .horizontal
+        row1Stack.distribution = .fillEqually
+        row1Stack.spacing = 6
+        var row1KeyViews: [UIButton] = []
+        for key in row1Keys {
+            let btn = createNormalKey(title: key)
+            row1Stack.addArrangedSubview(btn)
+            row1KeyViews.append(btn)
+        }
+        mainStack.addArrangedSubview(row1Stack)
 
-        // Row 2 (Centered like native iOS with margin)
-        let row2Container = UIStackView()
-        row2Container.axis = .horizontal
-        row2Container.spacing = 6
-        let spacerL = UIView()
-        let spacerR = UIView()
-        let margin: CGFloat = (isSymbolMode) ? 8 : 16
-        NSLayoutConstraint.activate([
-            spacerL.widthAnchor.constraint(equalToConstant: margin),
-            spacerR.widthAnchor.constraint(equalToConstant: margin)
-        ])
-        row2Container.addArrangedSubview(spacerL)
-        row2Container.addArrangedSubview(createRow(keys: row2Letters))
-        row2Container.addArrangedSubview(spacerR)
-        mainStack.addArrangedSubview(row2Container)
+        guard let sampleKey = row1KeyViews.first else { return }
 
-        // Row 3 (Shift / Symbols Switcher, Keys, Delete)
-        let row3 = UIStackView()
-        row3.axis = .horizontal
-        row3.spacing = 6
-        row3.distribution = .fillProportionally
+        // --- ROW 2 (9 Keys Centered with Sub-Pixel Apple Precision) ---
+        let row2Stack = UIStackView()
+        row2Stack.axis = .horizontal
+        row2Stack.spacing = 6
 
+        if !isSymbolMode {
+            // Left spacer: exactly (keyWidth + 6.0) / 2.0 so 'A' is centered under 'Q'-'W' gap
+            let leftSpacer = UIView()
+            leftSpacer.translatesAutoresizingMaskIntoConstraints = false
+            let rightSpacer = UIView()
+            rightSpacer.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                leftSpacer.widthAnchor.constraint(equalTo: sampleKey.widthAnchor, multiplier: 0.5, constant: 3.0),
+                rightSpacer.widthAnchor.constraint(equalTo: leftSpacer.widthAnchor)
+            ])
+            row2Stack.addArrangedSubview(leftSpacer)
+
+            for key in row2Keys {
+                let btn = createNormalKey(title: key)
+                btn.translatesAutoresizingMaskIntoConstraints = false
+                btn.widthAnchor.constraint(equalTo: sampleKey.widthAnchor).isActive = true
+                row2Stack.addArrangedSubview(btn)
+            }
+            row2Stack.addArrangedSubview(rightSpacer)
+        } else {
+            // Symbol mode: 10 equal keys
+            row2Stack.distribution = .fillEqually
+            for key in row2Keys {
+                let btn = createNormalKey(title: key)
+                row2Stack.addArrangedSubview(btn)
+            }
+        }
+        mainStack.addArrangedSubview(row2Stack)
+
+        // --- ROW 3 (Shift, Keys, Delete) ---
+        let row3Stack = UIStackView()
+        row3Stack.axis = .horizontal
+        row3Stack.spacing = 6
+
+        // Left Key (Shift or Symbol mode switch)
+        let leftBtn: UIButton
         if isSymbolMode {
-            let altSwitchBtn = createSpecialKey(title: isAltSymbolMode ? "123" : "#+=", flex: 1.25)
-            altSwitchBtn.addTarget(self, action: #selector(toggleAltSymbolMode), for: .touchUpInside)
-            row3.addArrangedSubview(altSwitchBtn)
+            leftBtn = createSpecialKey(title: isAltSymbolMode ? "123" : "#+=")
+            leftBtn.addTarget(self, action: #selector(toggleAltSymbolMode), for: .touchUpInside)
         } else {
             let shiftIcon = isCapsLock ? "capslock.fill" : (isShifted ? "shift.fill" : "shift")
-            let shiftBtn = createSpecialKey(systemImage: shiftIcon, flex: 1.25)
+            leftBtn = createSpecialKey(systemImage: shiftIcon)
+            leftBtn.addTarget(self, action: #selector(toggleShift), for: .touchUpInside)
+            self.shiftButton = leftBtn
             if isUpper {
-                shiftBtn.backgroundColor = UIColor(white: 0.90, alpha: 1.0)
-                shiftBtn.tintColor = .black
+                leftBtn.backgroundColor = isDarkMode ? UIColor(white: 0.90, alpha: 1.0) : UIColor.white
+                leftBtn.tintColor = .black
             }
-            shiftBtn.addTarget(self, action: #selector(toggleShift), for: .touchUpInside)
-            row3.addArrangedSubview(shiftBtn)
+        }
+        leftBtn.translatesAutoresizingMaskIntoConstraints = false
+        // Exactly 1.5 * keyWidth + 3.0 so 'Z' sits directly under 'S'!
+        leftBtn.widthAnchor.constraint(equalTo: sampleKey.widthAnchor, multiplier: 1.5, constant: 3.0).isActive = true
+        row3Stack.addArrangedSubview(leftBtn)
+
+        if !isSymbolMode {
+            for key in row3Keys {
+                let btn = createNormalKey(title: key)
+                btn.translatesAutoresizingMaskIntoConstraints = false
+                btn.widthAnchor.constraint(equalTo: sampleKey.widthAnchor).isActive = true
+                row3Stack.addArrangedSubview(btn)
+            }
+        } else {
+            let midStack = UIStackView()
+            midStack.axis = .horizontal
+            midStack.distribution = .fillEqually
+            midStack.spacing = 6
+            for key in row3Keys {
+                let btn = createNormalKey(title: key)
+                midStack.addArrangedSubview(btn)
+            }
+            row3Stack.addArrangedSubview(midStack)
         }
 
-        let row3LetterStack = createRow(keys: row3Letters)
-        row3.addArrangedSubview(row3LetterStack)
-
-        let deleteBtn = createSpecialKey(systemImage: "delete.left.fill", flex: 1.25)
+        // Right Key (Delete / Backspace)
+        let deleteBtn = createSpecialKey(systemImage: "delete.left.fill")
+        deleteBtn.translatesAutoresizingMaskIntoConstraints = false
+        deleteBtn.widthAnchor.constraint(equalTo: leftBtn.widthAnchor).isActive = true
         deleteBtn.addTarget(self, action: #selector(deleteTouchDown), for: .touchDown)
         deleteBtn.addTarget(self, action: #selector(deleteTouchUp), for: [.touchUpInside, .touchUpOutside, .touchCancel])
-        row3.addArrangedSubview(deleteBtn)
-        mainStack.addArrangedSubview(row3)
+        row3Stack.addArrangedSubview(deleteBtn)
 
-        // Row 4 (123/ABC, Globe, Space, Return)
-        let row4 = UIStackView()
-        row4.axis = .horizontal
-        row4.spacing = 6
-        row4.distribution = .fillProportionally
+        mainStack.addArrangedSubview(row3Stack)
 
-        let modeBtn = createSpecialKey(title: isSymbolMode ? "ABC" : "123", flex: 1.3)
+        // --- ROW 4 (123/ABC, Globe, Space, Return) ---
+        let row4Stack = UIStackView()
+        row4Stack.axis = .horizontal
+        row4Stack.spacing = 6
+
+        let modeBtn = createSpecialKey(title: isSymbolMode ? "ABC" : "123")
+        modeBtn.translatesAutoresizingMaskIntoConstraints = false
+        modeBtn.widthAnchor.constraint(equalTo: leftBtn.widthAnchor, multiplier: 0.88).isActive = true
         modeBtn.addTarget(self, action: #selector(toggleSymbolMode), for: .touchUpInside)
-        row4.addArrangedSubview(modeBtn)
+        row4Stack.addArrangedSubview(modeBtn)
 
-        let globeBtn = createSpecialKey(systemImage: "globe", flex: 1.0)
+        let globeBtn = createSpecialKey(systemImage: "globe")
+        globeBtn.translatesAutoresizingMaskIntoConstraints = false
+        globeBtn.widthAnchor.constraint(equalTo: leftBtn.widthAnchor, multiplier: 0.80).isActive = true
         globeBtn.addTarget(self, action: #selector(handleInputModeList(from:with:)), for: .allTouchEvents)
-        row4.addArrangedSubview(globeBtn)
+        row4Stack.addArrangedSubview(globeBtn)
 
-        let spaceBtn = createNormalKey(title: "space", flex: 4.6)
+        let spaceBtn = createNormalKey(title: "space")
         spaceBtn.titleLabel?.font = UIFont.systemFont(ofSize: 15, weight: .regular)
-        spaceBtn.setTitleColor(UIColor(white: 0.78, alpha: 1.0), for: .normal)
+        spaceBtn.setContentHuggingPriority(.defaultLow, for: .horizontal)
         spaceBtn.addTarget(self, action: #selector(handleSpaceTouchDown), for: .touchDown)
         spaceBtn.addTarget(self, action: #selector(keyTouchUp(_:)), for: [.touchUpInside, .touchUpOutside, .touchCancel])
-        row4.addArrangedSubview(spaceBtn)
+        row4Stack.addArrangedSubview(spaceBtn)
 
-        let returnBtn = createSpecialKey(title: "return", flex: 1.8)
+        let returnBtn = createSpecialKey(title: "return")
         returnBtn.titleLabel?.font = UIFont.systemFont(ofSize: 16, weight: .regular)
+        returnBtn.translatesAutoresizingMaskIntoConstraints = false
+        returnBtn.widthAnchor.constraint(equalTo: leftBtn.widthAnchor, multiplier: 1.55).isActive = true
         returnBtn.addTarget(self, action: #selector(handleReturnTouchDown), for: .touchDown)
         returnBtn.addTarget(self, action: #selector(keyTouchUp(_:)), for: [.touchUpInside, .touchUpOutside, .touchCancel])
-        row4.addArrangedSubview(returnBtn)
+        row4Stack.addArrangedSubview(returnBtn)
 
-        mainStack.addArrangedSubview(row4)
+        mainStack.addArrangedSubview(row4Stack)
     }
 
-    private func createRow(keys: [String]) -> UIStackView {
-        let rowStack = UIStackView()
-        rowStack.axis = .horizontal
-        rowStack.distribution = .fillEqually
-        rowStack.spacing = 6
-
-        for key in keys {
-            let btn = createNormalKey(title: key)
-            btn.addTarget(self, action: #selector(keyTouchDown(_:)), for: .touchDown)
-            btn.addTarget(self, action: #selector(keyTouchUp(_:)), for: [.touchUpInside, .touchUpOutside, .touchCancel])
-            btn.addTarget(self, action: #selector(keyTapped(_:)), for: .touchUpInside)
-            rowStack.addArrangedSubview(btn)
-        }
-        return rowStack
-    }
-
-    private func createNormalKey(title: String, flex: CGFloat = 1.0) -> UIButton {
+    // MARK: - Key Factory Methods
+    private func createNormalKey(title: String) -> UIButton {
         let btn = UIButton(type: .custom)
         btn.setTitle(title, for: .normal)
-        btn.setTitleColor(.white, for: .normal)
-        btn.titleLabel?.font = UIFont.systemFont(ofSize: 22.5, weight: .regular)
+        btn.setTitleColor(normalKeyTextColor, for: .normal)
+        btn.titleLabel?.font = UIFont.systemFont(ofSize: 23, weight: .regular)
         btn.backgroundColor = normalKeyColor
-        btn.layer.cornerRadius = 5.0
-        btn.layer.shadowColor = UIColor.black.cgColor
-        btn.layer.shadowOffset = CGSize(width: 0, height: 1.0)
-        btn.layer.shadowOpacity = 0.35
-        btn.layer.shadowRadius = 0.0
-        btn.layer.masksToBounds = false
         
-        if flex != 1.0 {
-            btn.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        }
+        // Exact Apple Continuous Squircle Corners
+        btn.layer.cornerRadius = 5.0
+        btn.layer.cornerCurve = .continuous
+        
+        // Crisp 1-pixel bottom 3D shadow
+        btn.layer.masksToBounds = false
+        btn.layer.shadowColor = keyShadowColor.cgColor
+        btn.layer.shadowOffset = CGSize(width: 0, height: 1.0)
+        btn.layer.shadowOpacity = keyShadowOpacity
+        btn.layer.shadowRadius = 0.0
+
+        btn.addTarget(self, action: #selector(keyTouchDown(_:)), for: .touchDown)
+        btn.addTarget(self, action: #selector(keyTouchUp(_:)), for: [.touchUpInside, .touchUpOutside, .touchCancel])
+        btn.addTarget(self, action: #selector(keyTapped(_:)), for: .touchUpInside)
+
+        normalButtons.append(btn)
         return btn
     }
 
-    private func createSpecialKey(title: String? = nil, systemImage: String? = nil, flex: CGFloat) -> UIButton {
+    private func createSpecialKey(title: String? = nil, systemImage: String? = nil) -> UIButton {
         let btn = UIButton(type: .custom)
         if let title = title {
             btn.setTitle(title, for: .normal)
-            btn.setTitleColor(.white, for: .normal)
-            btn.titleLabel?.font = UIFont.systemFont(ofSize: 15.5, weight: .medium)
+            btn.setTitleColor(specialKeyTextColor, for: .normal)
+            btn.titleLabel?.font = UIFont.systemFont(ofSize: 15.5, weight: .regular)
         }
         if let systemImage = systemImage {
-            let config = UIImage.SymbolConfiguration(pointSize: 17, weight: .medium)
+            let config = UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)
             let img = UIImage(systemName: systemImage, withConfiguration: config)
             btn.setImage(img, for: .normal)
-            btn.tintColor = .white
+            btn.tintColor = specialKeyTextColor
         }
         btn.backgroundColor = specialKeyColor
-        btn.layer.cornerRadius = 5.0
-        btn.layer.shadowColor = UIColor.black.cgColor
-        btn.layer.shadowOffset = CGSize(width: 0, height: 1.0)
-        btn.layer.shadowOpacity = 0.35
-        btn.layer.shadowRadius = 0.0
-        btn.layer.masksToBounds = false
         
+        btn.layer.cornerRadius = 5.0
+        btn.layer.cornerCurve = .continuous
+        btn.layer.masksToBounds = false
+        btn.layer.shadowColor = keyShadowColor.cgColor
+        btn.layer.shadowOffset = CGSize(width: 0, height: 1.0)
+        btn.layer.shadowOpacity = keyShadowOpacity
+        btn.layer.shadowRadius = 0.0
+
         btn.addTarget(self, action: #selector(specialKeyTouchDown(_:)), for: .touchDown)
         btn.addTarget(self, action: #selector(specialKeyTouchUp(_:)), for: [.touchUpInside, .touchUpOutside, .touchCancel])
+
+        specialButtons.append(btn)
         return btn
     }
 
-    // MARK: - Haptic Touch Feedback & Visual Highlights
+    // MARK: - Key Events & Feedback
     @objc private func keyTouchDown(_ sender: UIButton) {
         sender.backgroundColor = normalKeyHighlightColor
         lightHaptic.impactOccurred()
@@ -487,16 +643,15 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
     }
 
     @objc private func specialKeyTouchUp(_ sender: UIButton) {
-        if sender.title(for: .normal) == "return" || sender.title(for: .normal) == "123" || sender.title(for: .normal) == "ABC" || sender.title(for: .normal) == "#+=" {
-            sender.backgroundColor = specialKeyColor
-        } else if (isShifted || isCapsLock) && sender.image(for: .normal) != nil {
-            // keep shifted white
+        if (isShifted || isCapsLock) && sender == shiftButton {
+            sender.backgroundColor = isDarkMode ? UIColor(white: 0.90, alpha: 1.0) : UIColor.white
+            sender.tintColor = .black
         } else {
             sender.backgroundColor = specialKeyColor
+            sender.tintColor = specialKeyTextColor
         }
     }
 
-    // MARK: - Key Actions
     @objc private func keyTapped(_ sender: UIButton) {
         guard let title = sender.title(for: .normal) else { return }
         textDocumentProxy.insertText(title)
@@ -530,7 +685,6 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
     @objc private func handleSpaceTouchDown() {
         let now = Date().timeIntervalSince1970
         if now - lastSpaceTapTime < 0.35 {
-            // Double-tap space shortcut: convert space to ". "
             textDocumentProxy.deleteBackward()
             textDocumentProxy.insertText(". ")
             lastSpaceTapTime = 0
@@ -553,7 +707,6 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
     @objc private func toggleShift() {
         let now = Date().timeIntervalSince1970
         if now - lastShiftTapTime < 0.35 {
-            // Double tap = Caps Lock
             isCapsLock.toggle()
             isShifted = isCapsLock
         } else {
@@ -627,25 +780,20 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
     }
 
     private func getApiKey() -> String {
-        // 1. Check local keyboard preference
         if let custom = UserDefaults.standard.string(forKey: "custom_gemini_api_key")?.trimmingCharacters(in: .whitespacesAndNewlines), custom.count > 25 {
             return custom
         }
-        // 2. Check App Group if available
         if let shared = UserDefaults(suiteName: appGroupIdentifier)?.string(forKey: "@writing_assistant_api_key")?.trimmingCharacters(in: .whitespacesAndNewlines), shared.count > 25 {
             return shared
         }
-        // 3. Fallback to default verified working key
         return defaultApiKey
     }
 
     private func analyzeText(_ sentence: String) {
         setLogoState(mode: .checking)
 
-        // 1. Instant local offline check with Apple UITextChecker
         let localSuggestions = checkOfflineSpelling(in: sentence)
 
-        // If Full Access is off, notify user
         if !hasFullAccess {
             clearSuggestions()
             setLogoState(mode: .offline)
@@ -662,7 +810,6 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
             return
         }
 
-        // 2. Query High-Speed Gemini Model with safetySettings
         let apiKey = getApiKey()
         guard let url = URL(string: "\(primaryEndpoint)?key=\(apiKey)") else { return }
 
@@ -722,7 +869,6 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
                     self.displayResults(fullFix: parsed.fullFix, suggestions: parsed.suggestions, sentence: sentence)
                 }
             } else {
-                // If network timeout or offline
                 DispatchQueue.main.async {
                     if !localSuggestions.isEmpty {
                         self.setLogoState(mode: .errors(count: localSuggestions.count))
@@ -883,7 +1029,6 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
             return
         }
 
-        // Errors Found -> Update Grammarly Logo Badge
         setLogoState(mode: .errors(count: suggestions.count))
 
         // 1. One-Tap Grammarly "✨ Fix All" Card
@@ -901,7 +1046,7 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
             suggestionsStackView.addArrangedSubview(fixAllCard)
         }
 
-        // 2. Individual Grammarly Suggestion Cards (Strikethrough Red -> Green Replacement)
+        // 2. Individual Grammarly Suggestion Cards
         for item in suggestions {
             addSuggestionCard(original: item.original, replacement: item.replacement)
         }
@@ -910,12 +1055,12 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
     private func addTonePill(title: String, tone: String? = nil, isStatic: Bool = false) {
         let pill = UIButton(type: .custom)
         pill.setTitle(title, for: .normal)
-        pill.setTitleColor(isStatic ? grammarlyGreen : UIColor(white: 0.88, alpha: 1.0), for: .normal)
+        pill.setTitleColor(isStatic ? grammarlyGreen : (isDarkMode ? UIColor(white: 0.88, alpha: 1.0) : UIColor(white: 0.20, alpha: 1.0)), for: .normal)
         pill.titleLabel?.font = UIFont.systemFont(ofSize: 12.5, weight: isStatic ? .bold : .medium)
-        pill.backgroundColor = isStatic ? UIColor(white: 0.18, alpha: 0.7) : UIColor(white: 0.22, alpha: 1.0)
+        pill.backgroundColor = isStatic ? grammarlyGreen.withAlphaComponent(0.15) : (isDarkMode ? UIColor(white: 0.22, alpha: 1.0) : UIColor.white)
         pill.layer.cornerRadius = 13
         pill.layer.borderWidth = 0.8
-        pill.layer.borderColor = isStatic ? grammarlyGreen.withAlphaComponent(0.4).cgColor : UIColor(white: 0.32, alpha: 1.0).cgColor
+        pill.layer.borderColor = isStatic ? grammarlyGreen.withAlphaComponent(0.4).cgColor : (isDarkMode ? UIColor(white: 0.32, alpha: 1.0).cgColor : UIColor(white: 0.80, alpha: 1.0).cgColor)
         pill.contentEdgeInsets = UIEdgeInsets(top: 4, left: 10, bottom: 4, right: 10)
 
         if let tone = tone {
@@ -930,7 +1075,6 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
     private func addSuggestionCard(original: String, replacement: String) {
         let card = UIButton(type: .custom)
         
-        // Exact Grammarly-style visual: Red wrong -> Green fix
         let normalText = "\(original)  ➔  \(replacement)"
         let attr = NSMutableAttributedString(string: normalText)
         if let range = normalText.range(of: original) {
@@ -945,7 +1089,7 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
         }
         
         card.setAttributedTitle(attr, for: .normal)
-        card.backgroundColor = UIColor(red: 0.18, green: 0.20, blue: 0.25, alpha: 1.0)
+        card.backgroundColor = isDarkMode ? UIColor(red: 0.18, green: 0.20, blue: 0.25, alpha: 1.0) : UIColor.white
         card.layer.cornerRadius = 13
         card.layer.borderWidth = 1.0
         card.layer.borderColor = grammarlyGreen.withAlphaComponent(0.6).cgColor
@@ -990,7 +1134,6 @@ class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
             notificationHaptic.notificationOccurred(.success)
             debounceAnalysis(immediate: true)
         } else {
-            // Trimmed fallback
             let trimmed = original.trimmingCharacters(in: .whitespacesAndNewlines)
             if let trimmedRange = context.range(of: trimmed, options: [.backwards, .caseInsensitive]) {
                 let distance = context.distance(from: trimmedRange.upperBound, to: context.endIndex)
