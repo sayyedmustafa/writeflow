@@ -1,7 +1,7 @@
 name: Build iOS IPA (Zero-Mac Cloud Pipeline)
 
 on:
-  workflow_dispatch: # Allows manual trigger from GitHub UI
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -9,11 +9,16 @@ on:
 jobs:
   build-ios:
     name: Build Unsigned iOS IPA
-    runs-on: macos-14 # Free Apple Silicon macOS runner on GitHub Actions
+    runs-on: macos-14
 
     steps:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
+
+      - name: 🍏 Select Xcode 16
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16.0'
 
       - name: 🟢 Setup Node.js
         uses: actions/setup-node@v4
