@@ -1,14 +1,27 @@
 const fs = require('fs');
 const path = require('path');
 
-function patchPackageSwift(filePath) {
+function patchSwiftFile(filePath) {
   if (!fs.existsSync(filePath)) return;
   let content = fs.readFileSync(filePath, 'utf8');
-  content = content.replace(/\/\/\s*swift-tools-version:\s*6\.2/g, '// swift-tools-version: 6.0');
-  // Remove trailing commas before closing parentheses and brackets
-  content = content.replace(/,(\s*[\)\]])/g, '$1');
-  fs.writeFileSync(filePath, content, 'utf8');
-  console.log('Successfully patched Package.swift:', filePath);
+  let modified = false;
+
+  // Fix: Swift 6.1 requires weak variables to be 'var' (since they can become nil)
+  if (content.includes('weak let')) {
+    content = content.replace(/\bweak\s+let\b/g, 'weak var');
+    modified = true;
+  }
+
+  // Fix: Remove trailing comma in tuple parameter types for Swift 6.1
+  if (content.includes('consuming JavaScriptValuesBuffer,')) {
+    content = content.replace('consuming JavaScriptValuesBuffer,', 'consuming JavaScriptValuesBuffer');
+    modified = true;
+  }
+
+  if (modified) {
+    fs.writeFileSync(filePath, content, 'utf8');
+    console.log('Successfully patched Swift file for Swift 6.1 compatibility:', filePath);
+  }
 }
 
 function patchRuntimeScheduler(filePath) {
@@ -28,12 +41,14 @@ function walk(dir) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       walk(fullPath);
-    } else if (entry.name === 'Package.swift') {
-      patchPackageSwift(fullPath);
+    } else if (entry.name.endsWith('.swift')) {
+      patchSwiftFile(fullPath);
     } else if (entry.name === 'RuntimeScheduler.h') {
       patchRuntimeScheduler(fullPath);
     }
   }
 }
 
+console.log('Running patch-package-swift for Xcode 16.4 / Swift 6.1...');
 walk(path.join(__dirname, 'node_modules'));
+console.log('Patch complete.');

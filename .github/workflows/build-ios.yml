@@ -15,7 +15,7 @@ jobs:
       - name: 📥 Checkout repository
         uses: actions/checkout@v4
 
-      - name: 🍏 Select Xcode 16.4 (Swift 6.2)
+      - name: 🍏 Select Xcode 16.4
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: '16.4'
@@ -32,10 +32,14 @@ jobs:
           cache: npm
 
       - name: 📦 Install dependencies
-        run: npm install
+        run: |
+          npm install
+          node patch-package-swift.js
 
       - name: ⚙️ Generate Native Xcode Project with Keyboard Plugin
-        run: npx expo prebuild --platform ios --clean
+        run: |
+          npx expo prebuild --platform ios --clean
+          node patch-package-swift.js
 
       - name: 🔨 Compile Xcode Archive (No Signing Required)
         run: |
