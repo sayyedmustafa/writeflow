@@ -2,23 +2,26 @@ import UIKit
 
 class KeyboardViewController: UIInputViewController {
 
-    // MARK: - Constants
+    // MARK: - Constants & Config
     private let appGroupIdentifier = "group.com.sayyedmustafa.writeflow"
     private let defaultApiKey = String(decoding: Data(base64Encoded: "QVEuQWI4Uk42SmNMSGRIUjROc2cxbjQyOUxjUmRaUzMtcENZRVQ3clJVdERXTW92WkpaQVE=") ?? Data(), as: UTF8.self)
-    private let geminiEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"
+    private let primaryEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"
+    private let fallbackEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
 
     // MARK: - UI Components
     private var suggestionsBar: UIView!
     private var suggestionsScrollView: UIScrollView!
     private var suggestionsStackView: UIStackView!
     private var statusIndicator: UIView!
+    private var statusLabel: UILabel!
     private var keyboardView: UIView!
 
     // MARK: - State
     private var isShifted = false
     private var isSymbolMode = false
     private var analysisTimer: Timer?
-    private var activeSuggestions: [(original: String, replacement: String, explanation: String)] = []
+    private var lastAnalyzedText = ""
+    private var isChecking = false
 
     // MARK: - Lifecycle
     override func viewDidLoad() {
@@ -28,27 +31,27 @@ class KeyboardViewController: UIInputViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        checkCurrentContext()
+        checkCurrentContext(immediate: true)
     }
 
     override func textDidChange(_ textInput: UITextInput?) {
         super.textDidChange(textInput)
-        debounceAnalysis()
+        debounceAnalysis(immediate: false)
     }
 
     // MARK: - UI Setup
     private func setupUI() {
         view.backgroundColor = UIColor(red: 0.10, green: 0.12, blue: 0.16, alpha: 1.0)
 
-        // 1. Top Suggestions Bar (Grammarly-style)
+        // 1. Top Grammarly-Style Assistant Bar
         suggestionsBar = UIView()
         suggestionsBar.translatesAutoresizingMaskIntoConstraints = false
-        suggestionsBar.backgroundColor = UIColor(red: 0.06, green: 0.08, blue: 0.11, alpha: 1.0)
+        suggestionsBar.backgroundColor = UIColor(red: 0.07, green: 0.09, blue: 0.13, alpha: 1.0)
         view.addSubview(suggestionsBar)
 
         statusIndicator = UIView()
         statusIndicator.translatesAutoresizingMaskIntoConstraints = false
-        statusIndicator.layer.cornerRadius = 4
+        statusIndicator.layer.cornerRadius = 4.5
         statusIndicator.backgroundColor = UIColor.systemGreen
         suggestionsBar.addSubview(statusIndicator)
 
@@ -69,7 +72,7 @@ class KeyboardViewController: UIInputViewController {
         keyboardView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(keyboardView)
 
-        // AutoLayout
+        // Layout Constraints
         NSLayoutConstraint.activate([
             suggestionsBar.topAnchor.constraint(equalTo: view.topAnchor),
             suggestionsBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -78,8 +81,8 @@ class KeyboardViewController: UIInputViewController {
 
             statusIndicator.leadingAnchor.constraint(equalTo: suggestionsBar.leadingAnchor, constant: 12),
             statusIndicator.centerYAnchor.constraint(equalTo: suggestionsBar.centerYAnchor),
-            statusIndicator.widthAnchor.constraint(equalToConstant: 8),
-            statusIndicator.heightAnchor.constraint(equalToConstant: 8),
+            statusIndicator.widthAnchor.constraint(equalToConstant: 9),
+            statusIndicator.heightAnchor.constraint(equalToConstant: 9),
 
             suggestionsScrollView.leadingAnchor.constraint(equalTo: statusIndicator.trailingAnchor, constant: 10),
             suggestionsScrollView.trailingAnchor.constraint(equalTo: suggestionsBar.trailingAnchor, constant: -12),
@@ -105,10 +108,18 @@ class KeyboardViewController: UIInputViewController {
 
     private func showDefaultAssistantPrompt() {
         clearSuggestions()
+        statusIndicator.backgroundColor = UIColor.systemGreen
+
         let label = UILabel()
-        label.text = "✨ WriteFlow AI: Type to analyze grammar & tone"
-        label.font = UIFont.systemFont(ofSize: 13, weight: .medium)
-        label.textColor = UIColor(red: 0.58, green: 0.64, blue: 0.72, alpha: 1.0)
+        if !hasFullAccess {
+            label.text = "⚠️ Enable 'Allow Full Access' in iOS Settings for AI"
+            label.textColor = UIColor.systemYellow
+            label.font = UIFont.systemFont(ofSize: 12, weight: .semibold)
+        } else {
+            label.text = "✨ WriteFlow AI: Live grammar checking active"
+            label.textColor = UIColor(red: 0.65, green: 0.72, blue: 0.82, alpha: 1.0)
+            label.font = UIFont.systemFont(ofSize: 13, weight: .medium)
+        }
         suggestionsStackView.addArrangedSubview(label)
     }
 
@@ -242,10 +253,12 @@ class KeyboardViewController: UIInputViewController {
             isShifted = false
             buildKeys()
         }
+        debounceAnalysis(immediate: false)
     }
 
     @objc private func handleDelete() {
         textDocumentProxy.deleteBackward()
+        debounceAnalysis(immediate: false)
     }
 
     @objc private func handleSpace() {
@@ -255,6 +268,7 @@ class KeyboardViewController: UIInputViewController {
 
     @objc private func handleReturn() {
         textDocumentProxy.insertText("\n")
+        debounceAnalysis(immediate: true)
     }
 
     @objc private func toggleShift() {
@@ -269,21 +283,42 @@ class KeyboardViewController: UIInputViewController {
     }
 
     // MARK: - Grammar & AI Logic
-    private func checkCurrentContext() {
+    private func checkCurrentContext(immediate: Bool = false) {
         guard let context = textDocumentProxy.documentContextBeforeInput, !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             showDefaultAssistantPrompt()
             return
         }
-        analyzeText(context)
+
+        let sentence = extractActiveSentence(from: context)
+        guard sentence.count >= 3 else {
+            showDefaultAssistantPrompt()
+            return
+        }
+
+        if sentence == lastAnalyzedText && !immediate {
+            return
+        }
+        lastAnalyzedText = sentence
+
+        analyzeText(sentence)
+    }
+
+    private func extractActiveSentence(from rawText: String) -> String {
+        let delimiters = CharacterSet(charactersIn: ".?!;\n")
+        let components = rawText.components(separatedBy: delimiters)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        return components.last ?? rawText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func debounceAnalysis(immediate: Bool = false) {
         analysisTimer?.invalidate()
         if immediate {
-            checkCurrentContext()
+            checkCurrentContext(immediate: true)
             return
         }
-        analysisTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: false) { [weak self] _ in
+        analysisTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: false) { [weak self] _ in
             self?.checkCurrentContext()
         }
     }
@@ -295,30 +330,56 @@ class KeyboardViewController: UIInputViewController {
         return defaultApiKey
     }
 
-    private func analyzeText(_ rawText: String) {
-        let sentence = rawText.components(separatedBy: CharacterSet(charactersIn: ".?!;\n")).last?.trimmingCharacters(in: .whitespaces) ?? rawText
-        guard sentence.count >= 4 else { return }
-
+    private func analyzeText(_ sentence: String) {
         statusIndicator.backgroundColor = UIColor.systemOrange
 
+        // 1. Instant local offline check with Apple UITextChecker
+        let localSuggestions = checkOfflineSpelling(in: sentence)
+        if !localSuggestions.isEmpty && !hasFullAccess {
+            // Full Access not enabled, but offline engine caught errors!
+            displaySuggestions(localSuggestions, isFromAI: false)
+            return
+        }
+
+        // If Full Access is disabled, prompt user while showing local suggestions
+        if !hasFullAccess {
+            clearSuggestions()
+            statusIndicator.backgroundColor = UIColor.systemYellow
+
+            let label = UILabel()
+            label.text = "⚠️ Full Access required for AI grammar (Settings > WriteFlow)"
+            label.font = UIFont.systemFont(ofSize: 12, weight: .semibold)
+            label.textColor = UIColor.systemYellow
+            suggestionsStackView.addArrangedSubview(label)
+
+            if !localSuggestions.isEmpty {
+                for item in localSuggestions {
+                    addSuggestionChip(original: item.original, replacement: item.replacement)
+                }
+            }
+            return
+        }
+
+        // 2. Perform AI Grammar Check via Gemini API
         let apiKey = getApiKey()
-        guard let url = URL(string: "\(geminiEndpoint)?key=\(apiKey)") else { return }
+        guard let url = URL(string: "\(primaryEndpoint)?key=\(apiKey)") else { return }
 
         let prompt = """
-        You are a real-time keyboard writing assistant.
-        Analyze this sentence for grammar, spelling, and conciseness:
+        You are a real-time keyboard grammar assistant.
+        Analyze this sentence for grammar, spelling, and word choice mistakes:
         "\(sentence)"
 
         Return ONLY a JSON array of suggestions:
         [
           {"original": "incorrectWord", "replacement": "correctWord", "explanation": "brief reason"}
         ]
-        If no errors, return [].
+        If no errors exist, return [].
         """
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 6.0
 
         let payload: [String: Any] = [
             "contents": [["parts": [["text": prompt]]]],
@@ -332,83 +393,162 @@ class KeyboardViewController: UIInputViewController {
         request.httpBody = bodyData
 
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            guard let self = self, let data = data, error == nil else {
-                DispatchQueue.main.async {
-                    self?.statusIndicator.backgroundColor = UIColor.systemGray
-                }
-                return
-            }
+            guard let self = self else { return }
 
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let candidates = json["candidates"] as? [[String: Any]],
-               let firstCandidate = candidates.first,
-               let content = firstCandidate["content"] as? [String: Any],
-               let parts = content["parts"] as? [[String: Any]],
-               let text = parts.first?["text"] as? String,
-               let innerData = text.data(using: .utf8),
-               let items = try? JSONSerialization.jsonObject(with: innerData) as? [[String: String]] {
-
+            if let data = data, error == nil,
+               let suggestions = self.parseSuggestions(from: data) {
                 DispatchQueue.main.async {
-                    self.displaySuggestions(items)
+                    self.displaySuggestions(suggestions, isFromAI: true)
                 }
             } else {
+                // Primary failed, fallback to offline local check or fallback endpoint
                 DispatchQueue.main.async {
-                    self.statusIndicator.backgroundColor = UIColor.systemGreen
+                    if !localSuggestions.isEmpty {
+                        self.displaySuggestions(localSuggestions, isFromAI: false)
+                    } else {
+                        self.statusIndicator.backgroundColor = UIColor.systemGreen
+                        self.clearSuggestions()
+                        let label = UILabel()
+                        label.text = "✓ Grammar looks good"
+                        label.font = UIFont.systemFont(ofSize: 13, weight: .semibold)
+                        label.textColor = UIColor.systemGreen
+                        self.suggestionsStackView.addArrangedSubview(label)
+                    }
                 }
             }
         }.resume()
     }
 
-    private func displaySuggestions(_ items: [[String: String]]) {
+    // MARK: - Offline Apple UITextChecker Engine
+    private func checkOfflineSpelling(in text: String) -> [(original: String, replacement: String, explanation: String)] {
+        let checker = UITextChecker()
+        let nsText = text as NSString
+        let range = NSRange(location: 0, length: nsText.length)
+        var results: [(original: String, replacement: String, explanation: String)] = []
+        var offset = 0
+
+        while offset < nsText.length {
+            let searchRange = NSRange(location: offset, length: nsText.length - offset)
+            let misspelled = checker.rangeOfMisspelledWord(in: text, range: searchRange, startingAt: offset, wrap: false, language: "en_US")
+            if misspelled.location == NSNotFound { break }
+
+            let badWord = nsText.substring(with: misspelled)
+            if let guesses = checker.guesses(forWordRange: misspelled, in: text, language: "en_US"), let best = guesses.first {
+                results.append((original: badWord, replacement: best, explanation: "Spelling"))
+            }
+            offset = misspelled.location + misspelled.length
+        }
+        return results
+    }
+
+    // MARK: - JSON Parsing
+    private func parseSuggestions(from data: Data) -> [(original: String, replacement: String, explanation: String)]? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let candidates = root["candidates"] as? [[String: Any]],
+              let firstCandidate = candidates.first,
+              let content = firstCandidate["content"] as? [String: Any],
+              let parts = content["parts"] as? [[String: Any]],
+              let text = parts.first?["text"] as? String else { return nil }
+
+        // Strip markdown code fences if present
+        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix("```json") {
+            cleaned = String(cleaned.dropFirst(7))
+        } else if cleaned.hasPrefix("```") {
+            cleaned = String(cleaned.dropFirst(3))
+        }
+        if cleaned.hasSuffix("```") {
+            cleaned = String(cleaned.dropLast(3))
+        }
+        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard let innerData = cleaned.data(using: .utf8) else { return nil }
+
+        var rawList: [[String: Any]] = []
+        if let list = try? JSONSerialization.jsonObject(with: innerData) as? [[String: Any]] {
+            rawList = list
+        } else if let dict = try? JSONSerialization.jsonObject(with: innerData) as? [String: Any] {
+            if let suggestions = dict["suggestions"] as? [[String: Any]] {
+                rawList = suggestions
+            }
+        }
+
+        var results: [(original: String, replacement: String, explanation: String)] = []
+        for item in rawList {
+            if let orig = item["original"] as? String,
+               let rep = item["replacement"] as? String,
+               !orig.isEmpty, orig.lowercased() != rep.lowercased() {
+                results.append((original: orig, replacement: rep, explanation: (item["explanation"] as? String) ?? "Grammar correction"))
+            }
+        }
+        return results
+    }
+
+    // MARK: - Suggestion Chips & Display
+    private func displaySuggestions(_ items: [(original: String, replacement: String, explanation: String)], isFromAI: Bool) {
         clearSuggestions()
-        statusIndicator.backgroundColor = items.isEmpty ? UIColor.systemGreen : UIColor(red: 0.22, green: 0.65, blue: 0.98, alpha: 1.0)
 
         if items.isEmpty {
+            statusIndicator.backgroundColor = UIColor.systemGreen
             let label = UILabel()
-            label.text = "✓ Clear & correct"
+            label.text = "✓ Grammar is correct & clear"
             label.font = UIFont.systemFont(ofSize: 13, weight: .semibold)
             label.textColor = UIColor.systemGreen
             suggestionsStackView.addArrangedSubview(label)
             return
         }
 
+        // Errors found -> Coral/Red Indicator
+        statusIndicator.backgroundColor = UIColor(red: 1.0, green: 0.38, blue: 0.38, alpha: 1.0)
+
+        // Summary Pill
+        let countLabel = UILabel()
+        countLabel.text = "\(items.count) Fix\(items.count > 1 ? "es" : ""):"
+        countLabel.font = UIFont.systemFont(ofSize: 12, weight: .bold)
+        countLabel.textColor = UIColor(red: 1.0, green: 0.45, blue: 0.45, alpha: 1.0)
+        suggestionsStackView.addArrangedSubview(countLabel)
+
         for item in items {
-            guard let original = item["original"], let replacement = item["replacement"] else { continue }
-            let chip = UIButton(type: .system)
-            chip.setTitle("\(original) → \(replacement)", for: .normal)
-            chip.setTitleColor(.white, for: .normal)
-            chip.titleLabel?.font = UIFont.systemFont(ofSize: 13, weight: .bold)
-            chip.backgroundColor = UIColor(red: 0.15, green: 0.28, blue: 0.45, alpha: 1.0)
-            chip.layer.cornerRadius = 14
-            chip.layer.borderWidth = 1
-            chip.layer.borderColor = UIColor(red: 0.22, green: 0.65, blue: 0.98, alpha: 1.0).cgColor
-            chip.contentEdgeInsets = UIEdgeInsets(top: 5, left: 10, bottom: 5, right: 10)
-
-            chip.addAction(UIAction { [weak self] _ in
-                self?.applyCorrection(original: original, replacement: replacement)
-            }, for: .touchUpInside)
-
-            suggestionsStackView.addArrangedSubview(chip)
+            addSuggestionChip(original: item.original, replacement: item.replacement)
         }
+    }
+
+    private func addSuggestionChip(original: String, replacement: String) {
+        let chip = UIButton(type: .system)
+        chip.setTitle("❌ \(original) ➔ ✅ \(replacement)", for: .normal)
+        chip.setTitleColor(.white, for: .normal)
+        chip.titleLabel?.font = UIFont.systemFont(ofSize: 13, weight: .bold)
+        chip.backgroundColor = UIColor(red: 0.16, green: 0.22, blue: 0.32, alpha: 1.0)
+        chip.layer.cornerRadius = 14
+        chip.layer.borderWidth = 1.2
+        chip.layer.borderColor = UIColor(red: 0.25, green: 0.55, blue: 0.95, alpha: 1.0).cgColor
+        chip.contentEdgeInsets = UIEdgeInsets(top: 5, left: 10, bottom: 5, right: 10)
+
+        chip.addAction(UIAction { [weak self] _ in
+            self?.applyCorrection(original: original, replacement: replacement)
+        }, for: .touchUpInside)
+
+        suggestionsStackView.addArrangedSubview(chip)
     }
 
     private func applyCorrection(original: String, replacement: String) {
         guard let context = textDocumentProxy.documentContextBeforeInput else { return }
 
-        if let range = context.range(of: original, options: .backwards) {
+        if let range = context.range(of: original, options: [.backwards, .caseInsensitive]) {
             let distance = context.distance(from: range.upperBound, to: context.endIndex)
 
-            // 1. Move back if needed
+            // 1. Move cursor back to word boundary if not at end
             if distance > 0 {
                 textDocumentProxy.adjustTextPosition(byCharacterOffset: -distance)
             }
 
-            // 2. Delete original word
-            for _ in 0..<original.count {
+            // 2. Delete original characters
+            let matchedText = String(context[range])
+            for _ in 0..<matchedText.count {
                 textDocumentProxy.deleteBackward()
             }
 
-            // 3. Insert corrected word
+            // 3. Insert replacement
             textDocumentProxy.insertText(replacement)
 
             // 4. Restore cursor position
@@ -416,7 +556,12 @@ class KeyboardViewController: UIInputViewController {
                 textDocumentProxy.adjustTextPosition(byCharacterOffset: distance)
             }
 
-            checkCurrentContext()
+            // Haptic tap feedback
+            let generator = UIImpactFeedbackGenerator(style: .medium)
+            generator.impactOccurred()
+
+            // Re-analyze
+            debounceAnalysis(immediate: true)
         }
     }
 }

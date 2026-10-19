@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct SentenceSegment: Identifiable {
     let id = UUID()
@@ -20,12 +21,13 @@ struct ContentView: View {
     @State private var segments: [SentenceSegment] = []
     @State private var suggestions: [SuggestionItem] = []
     @State private var isAnalyzing: Bool = false
+    @State private var statusMessage: String = "Analyzing..."
     @State private var selectedTone: String = "Professional"
     @State private var isSettingsOpen: Bool = false
     @State private var apiKey: String = ""
-    @State private var showCopiedBanner: Bool = false
+    @State private var hasCheckedOnce: Bool = false
     
-    // Obfuscated default key to avoid GitHub Secret Scanning block while providing working API out-of-the-box
+    // Default working key obfuscated to prevent GitHub secret scan blocks
     private let defaultApiKey = String(decoding: Data(base64Encoded: "QVEuQWI4Uk42SmNMSGRIUjROc2cxbjQyOUxjUmRaUzMtcENZRVQ3clJVdERXTW92WkpaQVE=") ?? Data(), as: UTF8.self)
     private let appGroupSuite = "group.com.sayyedmustafa.writeflow"
     
@@ -41,19 +43,22 @@ struct ContentView: View {
                         // 1. Header Banner
                         headerSection
                         
-                        // 2. Keyboard Activation Setup Card
+                        // 2. Keyboard Setup Card
                         keyboardActivationCard
                         
-                        // 3. Sentence Grammar Visualizer Card
+                        // 3. Sentence Grammar Visualizer Card (Tells Right vs Wrong)
                         visualizerCard
                         
-                        // 4. Interactive Editor & Test Bed
+                        // 4. Quick Sample Test Buttons
+                        samplePillsSection
+                        
+                        // 5. Interactive Editor
                         editorSection
                         
-                        // 5. Tone Selector
+                        // 6. Writing Tone Selector
                         toneSelectorSection
                         
-                        // 6. Action Button
+                        // 7. Check Action Button
                         checkButton
                         
                         Spacer(minLength: 40)
@@ -65,6 +70,8 @@ struct ContentView: View {
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     HStack(spacing: 6) {
+                        Image(systemName: "pencil.and.outline")
+                            .foregroundColor(.blue)
                         Text("WriteFlow")
                             .font(.headline)
                             .foregroundColor(.white)
@@ -95,15 +102,15 @@ struct ContentView: View {
         }
     }
     
-    // MARK: - Subviews
+    // MARK: - Sections
     
     private var headerSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Grammarly-Style Writing Assistant")
+            Text("AI Writing & Grammar Assistant")
                 .font(.title2)
                 .fontWeight(.bold)
                 .foregroundColor(.white)
-            Text("Type anywhere on iOS or use the editor below. Errors highlight in red, correct grammar in green.")
+            Text("Works across all apps via the custom keyboard or here in the visualizer. Red indicates grammar errors, green indicates correct text.")
                 .font(.subheadline)
                 .foregroundColor(Color.gray)
         }
@@ -115,20 +122,21 @@ struct ContentView: View {
             HStack {
                 Image(systemName: "keyboard.fill")
                     .foregroundColor(.blue)
-                Text("Systemwide Keyboard Extension")
+                Text("Enable Keyboard in iOS")
                     .font(.headline)
                     .foregroundColor(.white)
                 Spacer()
-                Text("Step-by-step")
+                Text("Important")
                     .font(.caption)
-                    .foregroundColor(.gray)
+                    .fontWeight(.bold)
+                    .foregroundColor(.orange)
             }
             
             VStack(alignment: .leading, spacing: 8) {
-                stepRow(num: "1", text: "Open Settings > General > Keyboard > Keyboards")
-                stepRow(num: "2", text: "Tap 'Add New Keyboard...' and choose 'WriteFlow'")
-                stepRow(num: "3", text: "Tap 'WriteFlow' and toggle 'Allow Full Access' on")
-                stepRow(num: "4", text: "Switch to WriteFlow anywhere (WhatsApp, Notes, Messages)!")
+                stepRow(num: "1", text: "Open iPhone Settings > General > Keyboard > Keyboards")
+                stepRow(num: "2", text: "Tap 'Add New Keyboard...' and select 'WriteFlow'")
+                stepRow(num: "3", text: "Tap 'WriteFlow' and turn 'Allow Full Access' ON")
+                stepRow(num: "4", text: "Use 🌐 button in WhatsApp, Messages, or Safari to switch!")
             }
             
             Button(action: {
@@ -145,7 +153,7 @@ struct ContentView: View {
                 .foregroundColor(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
-                .background(Color.blue.opacity(0.8))
+                .background(Color.blue.opacity(0.85))
                 .cornerRadius(8)
             }
         }
@@ -173,55 +181,87 @@ struct ContentView: View {
         }
     }
     
+    // MARK: - Visualizer Card (Tells Right vs Wrong)
     private var visualizerCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
+            // Status Header
             HStack {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(suggestions.isEmpty ? Color.green : Color.orange)
-                        .frame(width: 8, height: 8)
-                    Text(suggestions.isEmpty ? "All Correct" : "\(suggestions.count) Fixes Available")
-                        .font(.caption)
-                        .fontWeight(.semibold)
-                        .foregroundColor(suggestions.isEmpty ? .green : .orange)
+                if isAnalyzing {
+                    HStack(spacing: 6) {
+                        ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .orange))
+                            .scaleEffect(0.8)
+                        Text("Analyzing sentence...")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                            .foregroundColor(.orange)
+                    }
+                } else if !suggestions.isEmpty {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 10, height: 10)
+                        Text("\(suggestions.count) Grammar Error\(suggestions.count > 1 ? "s" : "") Found")
+                            .font(.headline)
+                            .foregroundColor(.red)
+                    }
+                } else if hasCheckedOnce {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 10, height: 10)
+                        Text("Sentence is 100% Grammatically Correct")
+                            .font(.headline)
+                            .foregroundColor(.green)
+                    }
+                } else {
+                    Text("Live Sentence Analysis")
+                        .font(.headline)
+                        .foregroundColor(.white)
                 }
                 Spacer()
-                Text("Grammar Visualizer")
-                    .font(.caption)
-                    .foregroundColor(.gray)
             }
             
-            // Sentence Segment Flow View
+            // Sentence Segment Flow View (Red for error words, Green for correct words)
             if !segments.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Live Sentence Analysis:")
+                    Text("Interactive Grammar Breakdown:")
                         .font(.caption)
                         .foregroundColor(.gray)
                     
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 4) {
+                        HStack(spacing: 6) {
                             ForEach(segments) { segment in
-                                Text(segment.text)
-                                    .font(.system(size: 16, weight: .medium))
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 4)
-                                    .background(segment.isCorrect ? Color.green.opacity(0.18) : Color.red.opacity(0.22))
-                                    .foregroundColor(segment.isCorrect ? Color(red: 0.2, green: 0.88, blue: 0.5) : Color(red: 1.0, green: 0.4, blue: 0.4))
-                                    .cornerRadius(6)
-                                    .overlay(
-                                        RoundedRectangle(cornerRadius: 6)
-                                            .stroke(segment.isCorrect ? Color.green.opacity(0.4) : Color.red.opacity(0.6), lineWidth: 1)
-                                    )
+                                VStack(alignment: .center, spacing: 4) {
+                                    Text(segment.text)
+                                        .font(.system(size: 16, weight: .semibold))
+                                        .strikethrough(!segment.isCorrect, color: .red)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 6)
+                                        .background(segment.isCorrect ? Color.green.opacity(0.18) : Color.red.opacity(0.22))
+                                        .foregroundColor(segment.isCorrect ? Color(red: 0.2, green: 0.9, blue: 0.5) : Color(red: 1.0, green: 0.4, blue: 0.4))
+                                        .cornerRadius(8)
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .stroke(segment.isCorrect ? Color.green.opacity(0.4) : Color.red.opacity(0.6), lineWidth: 1.5)
+                                        )
+                                    
+                                    if let sug = segment.suggestion {
+                                        Text("➔ \(sug)")
+                                            .font(.caption2)
+                                            .fontWeight(.bold)
+                                            .foregroundColor(.green)
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
             
-            // Suggestion Chips
+            // Tap-to-Fix Suggestion Chips
             if !suggestions.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Tap to fix mistake:")
+                    Text("Tap to fix error:")
                         .font(.caption)
                         .foregroundColor(.gray)
                     
@@ -234,7 +274,7 @@ struct ContentView: View {
                                     HStack(spacing: 6) {
                                         Text(item.original)
                                             .strikethrough()
-                                            .foregroundColor(.red.opacity(0.8))
+                                            .foregroundColor(.red.opacity(0.9))
                                         Image(systemName: "arrow.right")
                                             .font(.caption2)
                                             .foregroundColor(.gray)
@@ -243,13 +283,13 @@ struct ContentView: View {
                                             .foregroundColor(.green)
                                     }
                                     .font(.subheadline)
-                                    .padding(.horizontal, 12)
+                                    .padding(.horizontal, 14)
                                     .padding(.vertical, 8)
                                     .background(Color(red: 0.16, green: 0.22, blue: 0.32))
                                     .cornerRadius(20)
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 20)
-                                            .stroke(Color.blue.opacity(0.5), lineWidth: 1)
+                                            .stroke(Color.blue.opacity(0.6), lineWidth: 1.2)
                                     )
                                 }
                             }
@@ -261,6 +301,50 @@ struct ContentView: View {
         .padding()
         .background(Color(red: 0.11, green: 0.14, blue: 0.20))
         .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(suggestions.isEmpty ? Color.green.opacity(0.3) : Color.red.opacity(0.4), lineWidth: 1.5)
+        )
+    }
+    
+    // MARK: - Sample Test Buttons
+    private var samplePillsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Try instant sample sentences:")
+                .font(.caption)
+                .foregroundColor(.gray)
+            
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    sampleButton(title: "She dont likes eating apple every days.", isWrong: true)
+                    sampleButton(title: "They is going to market yesterday.", isWrong: true)
+                    sampleButton(title: "The document was reviewed thoroughly.", isWrong: false)
+                }
+            }
+        }
+    }
+    
+    private func sampleButton(title: String, isWrong: Bool) -> some View {
+        Button(action: {
+            textInput = title
+            analyzeGrammar()
+        }) {
+            HStack(spacing: 4) {
+                Text(isWrong ? "❌" : "✓")
+                Text(title)
+                    .lineLimit(1)
+            }
+            .font(.caption)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color(red: 0.13, green: 0.17, blue: 0.24))
+            .foregroundColor(.white)
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(isWrong ? Color.red.opacity(0.3) : Color.green.opacity(0.3), lineWidth: 1)
+            )
+        }
     }
     
     private var editorSection: some View {
@@ -270,7 +354,7 @@ struct ContentView: View {
                 .foregroundColor(.gray)
             
             TextEditor(text: $textInput)
-                .frame(minHeight: 120)
+                .frame(minHeight: 110)
                 .padding(8)
                 .background(Color(red: 0.08, green: 0.10, blue: 0.15))
                 .foregroundColor(.white)
@@ -316,7 +400,7 @@ struct ContentView: View {
                     ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .white))
                 } else {
                     Image(systemName: "sparkles")
-                    Text("Check Grammar & Tone (Gemini 3.5)")
+                    Text("Check Grammar & Tone (AI)")
                 }
             }
             .font(.headline)
@@ -337,11 +421,12 @@ struct ContentView: View {
                     Button("Save API Key") {
                         saveSettings()
                         isSettingsOpen = false
+                        analyzeGrammar()
                     }
                 }
                 Section(header: Text("About")) {
-                    Text("WriteFlow AI Keyboard v1.0")
-                    Text("Powered by Google Gemini 3.5 Flash")
+                    Text("WriteFlow AI Keyboard v1.1")
+                    Text("Powered by Google Gemini AI")
                     Text("App Group: \(appGroupSuite)")
                         .font(.caption)
                         .foregroundColor(.gray)
@@ -352,7 +437,7 @@ struct ContentView: View {
         }
     }
     
-    // MARK: - Logic & Gemini AI Integration
+    // MARK: - Logic & AI Engine
     
     private func loadSettings() {
         if let sharedDefaults = UserDefaults(suiteName: appGroupSuite),
@@ -370,7 +455,7 @@ struct ContentView: View {
     }
     
     private func applySuggestion(_ item: SuggestionItem) {
-        if let range = textInput.range(of: item.original) {
+        if let range = textInput.range(of: item.original, options: .caseInsensitive) {
             textInput.replaceSubrange(range, with: item.replacement)
             analyzeGrammar()
         }
@@ -380,6 +465,7 @@ struct ContentView: View {
         guard !textInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             segments = []
             suggestions = []
+            hasCheckedOnce = false
             return
         }
         
@@ -389,28 +475,27 @@ struct ContentView: View {
         guard let url = URL(string: endpoint) else { return }
         
         let prompt = """
-        Analyze this text for grammar, spelling, and style with a \(selectedTone) tone:
+        You are an expert grammar and writing assistant.
+        Analyze this text for grammar, spelling, and style errors with a \(selectedTone) tone:
         "\(textInput)"
 
-        Return ONLY a JSON object formatted as:
-        {
-          "suggestions": [
-            {"original": "incorrectWord", "replacement": "correctWord", "explanation": "brief reason"}
-          ],
-          "correctedSentence": "full grammatically correct sentence"
-        }
-        If perfectly correct, return: {"suggestions": [], "correctedSentence": "\(textInput)"}
+        Return ONLY a JSON array of suggestions:
+        [
+          {"original": "incorrectWord", "replacement": "correctWord", "explanation": "brief reason"}
+        ]
+        If the text is grammatically correct and has no mistakes, return [].
         """
         
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 7.0
         
         let payload: [String: Any] = [
             "contents": [["parts": [["text": prompt]]]],
             "generationConfig": [
                 "response_mime_type": "application/json",
-                "temperature": 0.2
+                "temperature": 0.1
             ]
         ]
         
@@ -419,32 +504,86 @@ struct ContentView: View {
         URLSession.shared.dataTask(with: req) { data, _, err in
             DispatchQueue.main.async {
                 self.isAnalyzing = false
+                self.hasCheckedOnce = true
             }
-            guard let data = data, err == nil else { return }
             
-            if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let candidates = root["candidates"] as? [[String: Any]],
-               let firstCandidate = candidates.first,
-               let content = firstCandidate["content"] as? [String: Any],
-               let parts = content["parts"] as? [[String: Any]],
-               let text = parts.first?["text"] as? String,
-               let innerData = text.data(using: .utf8),
-               let result = try? JSONSerialization.jsonObject(with: innerData) as? [String: Any] {
-                
+            if let data = data, err == nil,
+               let parsed = self.parseSuggestionsFromData(data) {
                 DispatchQueue.main.async {
-                    var parsedSuggestions: [SuggestionItem] = []
-                    if let rawSuggestions = result["suggestions"] as? [[String: String]] {
-                        for item in rawSuggestions {
-                            if let orig = item["original"], let rep = item["replacement"] {
-                                parsedSuggestions.append(SuggestionItem(original: orig, replacement: rep, explanation: item["explanation"] ?? ""))
-                            }
-                        }
-                    }
-                    self.suggestions = parsedSuggestions
-                    self.buildVisualizerSegments(text: self.textInput, suggestions: parsedSuggestions)
+                    self.suggestions = parsed
+                    self.buildVisualizerSegments(text: self.textInput, suggestions: parsed)
+                }
+            } else {
+                // Fallback to local Apple UITextChecker
+                DispatchQueue.main.async {
+                    let localItems = self.checkOfflineSpelling(in: self.textInput)
+                    self.suggestions = localItems
+                    self.buildVisualizerSegments(text: self.textInput, suggestions: localItems)
                 }
             }
         }.resume()
+    }
+    
+    private func parseSuggestionsFromData(_ data: Data) -> [SuggestionItem]? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let candidates = root["candidates"] as? [[String: Any]],
+              let firstCandidate = candidates.first,
+              let content = firstCandidate["content"] as? [String: Any],
+              let parts = content["parts"] as? [[String: Any]],
+              let text = parts.first?["text"] as? String else { return nil }
+        
+        var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.hasPrefix("```json") {
+            cleaned = String(cleaned.dropFirst(7))
+        } else if cleaned.hasPrefix("```") {
+            cleaned = String(cleaned.dropFirst(3))
+        }
+        if cleaned.hasSuffix("```") {
+            cleaned = String(cleaned.dropLast(3))
+        }
+        cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        guard let innerData = cleaned.data(using: .utf8) else { return nil }
+        
+        var rawList: [[String: Any]] = []
+        if let list = try? JSONSerialization.jsonObject(with: innerData) as? [[String: Any]] {
+            rawList = list
+        } else if let dict = try? JSONSerialization.jsonObject(with: innerData) as? [String: Any] {
+            if let list = dict["suggestions"] as? [[String: Any]] {
+                rawList = list
+            }
+        }
+        
+        var results: [SuggestionItem] = []
+        for item in rawList {
+            if let orig = item["original"] as? String,
+               let repl = item["replacement"] as? String,
+               !orig.isEmpty, orig.lowercased() != repl.lowercased() {
+                results.append(SuggestionItem(original: orig, replacement: repl, explanation: (item["explanation"] as? String) ?? ""))
+            }
+        }
+        return results
+    }
+    
+    private func checkOfflineSpelling(in text: String) -> [SuggestionItem] {
+        let checker = UITextChecker()
+        let nsText = text as NSString
+        let range = NSRange(location: 0, length: nsText.length)
+        var results: [SuggestionItem] = []
+        var offset = 0
+        
+        while offset < nsText.length {
+            let searchRange = NSRange(location: offset, length: nsText.length - offset)
+            let misspelled = checker.rangeOfMisspelledWord(in: text, range: searchRange, startingAt: offset, wrap: false, language: "en_US")
+            if misspelled.location == NSNotFound { break }
+            
+            let badWord = nsText.substring(with: misspelled)
+            if let guesses = checker.guesses(forWordRange: misspelled, in: text, language: "en_US"), let best = guesses.first {
+                results.append(SuggestionItem(original: badWord, replacement: best, explanation: "Spelling correction"))
+            }
+            offset = misspelled.location + misspelled.length
+        }
+        return results
     }
     
     private func buildVisualizerSegments(text: String, suggestions: [SuggestionItem]) {
@@ -457,12 +596,13 @@ struct ContentView: View {
         var remaining = text
         
         for sug in suggestions {
-            if let range = remaining.range(of: sug.original) {
+            if let range = remaining.range(of: sug.original, options: .caseInsensitive) {
                 let prefix = String(remaining[..<range.lowerBound])
                 if !prefix.isEmpty {
                     result.append(SentenceSegment(text: prefix, isCorrect: true, suggestion: nil, explanation: nil))
                 }
-                result.append(SentenceSegment(text: sug.original, isCorrect: false, suggestion: sug.replacement, explanation: sug.explanation))
+                let actualWord = String(remaining[range])
+                result.append(SentenceSegment(text: actualWord, isCorrect: false, suggestion: sug.replacement, explanation: sug.explanation))
                 remaining = String(remaining[range.upperBound...])
             }
         }

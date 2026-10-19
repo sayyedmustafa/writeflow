@@ -39,3 +39,7 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+*.ipa
+generate_icons.py
+test_api.py
+
