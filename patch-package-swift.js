@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-function patchFile(filePath) {
+function patchPackageSwift(filePath) {
   if (!fs.existsSync(filePath)) return;
   let content = fs.readFileSync(filePath, 'utf8');
   content = content.replace(/\/\/\s*swift-tools-version:\s*6\.2/g, '// swift-tools-version: 6.0');
@@ -9,6 +9,16 @@ function patchFile(filePath) {
   content = content.replace(/,(\s*[\)\]])/g, '$1');
   fs.writeFileSync(filePath, content, 'utf8');
   console.log('Successfully patched Package.swift:', filePath);
+}
+
+function patchRuntimeScheduler(filePath) {
+  if (!fs.existsSync(filePath)) return;
+  let content = fs.readFileSync(filePath, 'utf8');
+  if (content.includes('SWIFT_RETURNS_RETAINED')) {
+    content = content.replace(/SWIFT_RETURNS_RETAINED\s+/g, '');
+    fs.writeFileSync(filePath, content, 'utf8');
+    console.log('Successfully patched RuntimeScheduler.h (removed SWIFT_RETURNS_RETAINED):', filePath);
+  }
 }
 
 function walk(dir) {
@@ -19,7 +29,9 @@ function walk(dir) {
     if (entry.isDirectory()) {
       walk(fullPath);
     } else if (entry.name === 'Package.swift') {
-      patchFile(fullPath);
+      patchPackageSwift(fullPath);
+    } else if (entry.name === 'RuntimeScheduler.h') {
+      patchRuntimeScheduler(fullPath);
     }
   }
 }

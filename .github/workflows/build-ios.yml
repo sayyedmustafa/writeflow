@@ -32,7 +32,9 @@ jobs:
           node patch-package-swift.js
 
       - name: ⚙️ Generate Native Xcode Project with Keyboard Plugin
-        run: npx expo prebuild --platform ios --clean
+        run: |
+          npx expo prebuild --platform ios --clean
+          node patch-package-swift.js
 
       - name: 🔨 Compile Xcode Archive (No Signing Required)
         run: |
