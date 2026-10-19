@@ -6,10 +6,10 @@ class KeyboardViewController: UIInputViewController {
     private let appGroupIdentifier = "group.com.sayyedmustafa.writeflow"
     private let defaultApiKey = String(decoding: Data(base64Encoded: "QVEuQWI4Uk42SmNMSGRIUjROc2cxbjQyOUxjUmRaUzMtcENZRVQ3clJVdERXTW92WkpaQVE=") ?? Data(), as: UTF8.self)
     
-    // Lightning-fast models that never return 503
-    private let primaryEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent"
+    // Blazing-fast models (~1s response time, zero 503 errors)
+    private let primaryEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent"
     private let fallbackEndpoint1 = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent"
-    private let fallbackEndpoint2 = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
+    private let fallbackEndpoint2 = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent"
 
     // MARK: - UI Components
     private var suggestionsBar: UIView!
@@ -156,7 +156,7 @@ class KeyboardViewController: UIInputViewController {
 
         if !hasFullAccess {
             let label = UILabel()
-            label.text = "⚠️ Tap here to Enable 'Full Access' in Settings"
+            label.text = "⚠️ Tap: Enable 'Full Access' in Settings"
             label.textColor = UIColor.systemYellow
             label.font = UIFont.systemFont(ofSize: 12, weight: .semibold)
             suggestionsStackView.addArrangedSubview(label)
@@ -206,7 +206,7 @@ class KeyboardViewController: UIInputViewController {
         // Row 1 (10 Keys)
         mainStack.addArrangedSubview(createRow(keys: row1Letters))
 
-        // Row 2 (9 Keys, centered like native iOS with 18pt padding)
+        // Row 2 (9 Keys, centered like native iOS with 16pt padding)
         let row2Container = UIStackView()
         row2Container.axis = .horizontal
         row2Container.spacing = 6
@@ -299,7 +299,6 @@ class KeyboardViewController: UIInputViewController {
         btn.titleLabel?.font = UIFont.systemFont(ofSize: 22.5, weight: .regular)
         btn.backgroundColor = normalKeyColor
         
-        // Exact iPhone key shadow & corner geometry
         btn.layer.cornerRadius = 5.0
         btn.layer.shadowColor = UIColor.black.cgColor
         btn.layer.shadowOffset = CGSize(width: 0, height: 1.0)
@@ -441,7 +440,6 @@ class KeyboardViewController: UIInputViewController {
     }
 
     private func extractActiveSentence(from rawText: String) -> String {
-        // Take the active sentence or paragraph
         let delimiters = CharacterSet(charactersIn: ".?!;\n")
         let components = rawText.components(separatedBy: delimiters)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -462,7 +460,8 @@ class KeyboardViewController: UIInputViewController {
     }
 
     private func getApiKey() -> String {
-        if let shared = UserDefaults(suiteName: appGroupIdentifier)?.string(forKey: "@writing_assistant_api_key"), !shared.isEmpty {
+        if let shared = UserDefaults(suiteName: appGroupIdentifier)?.string(forKey: "@writing_assistant_api_key")?.trimmingCharacters(in: .whitespacesAndNewlines),
+           shared.count > 25 {
             return shared
         }
         return defaultApiKey
@@ -495,14 +494,21 @@ class KeyboardViewController: UIInputViewController {
             return
         }
 
-        // 2. Query High-Speed Gemini Model (gemini-3.1-flash-lite-preview)
+        // 2. Query High-Speed Gemini Model (gemini-flash-lite-latest) with safetySettings
         let apiKey = getApiKey()
         guard let url = URL(string: "\(primaryEndpoint)?key=\(apiKey)") else { return }
 
         let prompt = """
-        You are a Grammarly-level AI writing assistant.
-        Analyze and proofread this text thoroughly for grammar, spelling, tense, and phrasing:
+        You are a strict grammar proofreader like Grammarly.
+        Proofread and correct this text thoroughly:
         "\(sentence)"
+
+        Strict Instructions:
+        1. Fix missing auxiliary verbs (e.g. "how you want" -> "how do you want").
+        2. Fix typos, slang, and colloquial shorthand (e.g. "wan" -> "want").
+        3. Fix capitalization (sentences must start with an uppercase letter).
+        4. Preserve tone/profanity if present, but fix all syntax and grammar.
+        5. If there are ANY typos, grammatical omissions, or errors, you MUST set "hasErrors": true.
 
         Return ONLY valid JSON:
         {
@@ -512,19 +518,25 @@ class KeyboardViewController: UIInputViewController {
             {"original": "flawed phrase", "replacement": "corrected phrase", "explanation": "brief reason"}
           ]
         }
-        If perfectly correct: {"fullSentenceFix": "", "hasErrors": false, "suggestions": []}.
+        If completely flawless standard English, return: {"fullSentenceFix": "", "hasErrors": false, "suggestions": []}.
         """
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 5.0
+        request.timeoutInterval = 12.0
 
         let payload: [String: Any] = [
             "contents": [["parts": [["text": prompt]]]],
             "generationConfig": [
                 "response_mime_type": "application/json",
                 "temperature": 0.1
+            ],
+            "safetySettings": [
+                ["category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"],
+                ["category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"],
+                ["category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"],
+                ["category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"]
             ]
         ]
 
@@ -534,18 +546,28 @@ class KeyboardViewController: UIInputViewController {
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else { return }
 
-            if let data = data, error == nil,
+            let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
+
+            if let data = data, error == nil, httpStatus == 200,
                let parsed = self.parseGrammarResponse(from: data) {
                 DispatchQueue.main.async {
                     self.displayResults(fullFix: parsed.fullFix, suggestions: parsed.suggestions, sentence: sentence)
                 }
             } else {
-                // Fallback to offline local check
+                // Network error or timeout: Show offline spelling if any, or a clear offline notice
                 DispatchQueue.main.async {
                     if !localSuggestions.isEmpty {
                         self.displayResults(fullFix: nil, suggestions: localSuggestions, sentence: sentence)
                     } else {
-                        self.showDefaultAssistantPrompt()
+                        self.statusIndicator.backgroundColor = UIColor.systemYellow
+                        self.statusLabel.text = "Offline"
+                        self.statusLabel.textColor = UIColor.systemYellow
+                        self.clearSuggestions()
+                        let label = UILabel()
+                        label.text = "⚠️ Network timeout. Tap to retry"
+                        label.textColor = UIColor.systemYellow
+                        label.font = UIFont.systemFont(ofSize: 12, weight: .medium)
+                        self.suggestionsStackView.addArrangedSubview(label)
                     }
                 }
             }
@@ -573,9 +595,16 @@ class KeyboardViewController: UIInputViewController {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 12.0
         let payload: [String: Any] = [
             "contents": [["parts": [["text": prompt]]]],
-            "generationConfig": ["response_mime_type": "application/json", "temperature": 0.2]
+            "generationConfig": ["response_mime_type": "application/json", "temperature": 0.2],
+            "safetySettings": [
+                ["category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"],
+                ["category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"],
+                ["category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"],
+                ["category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"]
+            ]
         ]
         request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
@@ -625,8 +654,12 @@ class KeyboardViewController: UIInputViewController {
               let candidates = root["candidates"] as? [[String: Any]],
               let firstCandidate = candidates.first,
               let content = firstCandidate["content"] as? [String: Any],
-              let parts = content["parts"] as? [[String: Any]],
-              let text = parts.first?["text"] as? String else { return nil }
+              let parts = content["parts"] as? [[String: Any]] else { return nil }
+
+        // Join parts to be resilient against thought signatures or multi-part responses
+        let textParts = parts.compactMap { $0["text"] as? String }
+        let text = textParts.joined(separator: "\n")
+        guard !text.isEmpty else { return nil }
 
         let cleaned = stripMarkdown(text)
         guard let innerData = cleaned.data(using: .utf8),

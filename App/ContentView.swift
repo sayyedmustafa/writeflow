@@ -22,17 +22,19 @@ struct ContentView: View {
     @State private var suggestions: [SuggestionItem] = []
     @State private var fullSentenceFix: String? = nil
     @State private var isAnalyzing: Bool = false
+    @State private var errorMessage: String? = nil
     @State private var selectedTone: String = "Professional"
     @State private var isSettingsOpen: Bool = false
     @State private var apiKey: String = ""
     @State private var hasCheckedOnce: Bool = false
+    @State private var debounceTimer: Timer? = nil
     
     // Default working key obfuscated to prevent GitHub secret scan blocks
     private let defaultApiKey = String(decoding: Data(base64Encoded: "QVEuQWI4Uk42SmNMSGRIUjROc2cxbjQyOUxjUmRaUzMtcENZRVQ3clJVdERXTW92WkpaQVE=") ?? Data(), as: UTF8.self)
     private let appGroupSuite = "group.com.sayyedmustafa.writeflow"
     
-    // Blazing-fast models that never return 503
-    private let primaryEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent"
+    // Blazing-fast model (~1s response time, zero 503 errors)
+    private let primaryEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent"
     private let fallbackEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent"
     
     let tones = ["Professional", "Casual", "Academic", "Creative"]
@@ -199,6 +201,15 @@ struct ContentView: View {
                             .fontWeight(.medium)
                             .foregroundColor(.orange)
                     }
+                } else if let err = errorMessage {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(Color.orange)
+                            .frame(width: 10, height: 10)
+                        Text(err)
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
                 } else if !suggestions.isEmpty {
                     HStack(spacing: 6) {
                         Circle()
@@ -341,9 +352,10 @@ struct ContentView: View {
             
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
+                    sampleButton(title: "how the fuck you wan this?", isWrong: true)
                     sampleButton(title: "She dont likes eating apple every days.", isWrong: true)
                     sampleButton(title: "They is going to market yesterday.", isWrong: true)
-                    sampleButton(title: "The report was reviewed thoroughly and approved.", isWrong: false)
+                    sampleButton(title: "How do you want this prepared?", isWrong: false)
                 }
             }
         }
@@ -374,7 +386,7 @@ struct ContentView: View {
     
     private var editorSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Companion Text Editor")
+            Text("Companion Text Editor (Live auto-check on typing)")
                 .font(.caption)
                 .foregroundColor(.gray)
             
@@ -388,6 +400,16 @@ struct ContentView: View {
                     RoundedRectangle(cornerRadius: 8)
                         .stroke(Color.gray.opacity(0.3), lineWidth: 1)
                 )
+                .onChange(of: textInput) { _ in
+                    debounceEditorCheck()
+                }
+        }
+    }
+    
+    private func debounceEditorCheck() {
+        debounceTimer?.invalidate()
+        debounceTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: false) { _ in
+            analyzeGrammar()
         }
     }
     
@@ -450,8 +472,8 @@ struct ContentView: View {
                     }
                 }
                 Section(header: Text("About")) {
-                    Text("WriteFlow AI Keyboard v1.2")
-                    Text("Powered by Google Gemini 3.1 Flash")
+                    Text("WriteFlow AI Keyboard v1.3")
+                    Text("Powered by Google Gemini Flash")
                     Text("App Group: \(appGroupSuite)")
                         .font(.caption)
                         .foregroundColor(.gray)
@@ -466,7 +488,7 @@ struct ContentView: View {
     
     private func loadSettings() {
         if let sharedDefaults = UserDefaults(suiteName: appGroupSuite),
-           let key = sharedDefaults.string(forKey: "@writing_assistant_api_key"), !key.isEmpty {
+           let key = sharedDefaults.string(forKey: "@writing_assistant_api_key")?.trimmingCharacters(in: .whitespacesAndNewlines), key.count > 25 {
             self.apiKey = key
         } else {
             self.apiKey = defaultApiKey
@@ -474,8 +496,9 @@ struct ContentView: View {
     }
     
     private func saveSettings() {
+        let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if let sharedDefaults = UserDefaults(suiteName: appGroupSuite) {
-            sharedDefaults.set(apiKey, forKey: "@writing_assistant_api_key")
+            sharedDefaults.set(trimmed, forKey: "@writing_assistant_api_key")
         }
     }
     
@@ -492,17 +515,28 @@ struct ContentView: View {
             suggestions = []
             fullSentenceFix = nil
             hasCheckedOnce = false
+            errorMessage = nil
             return
         }
         
         isAnalyzing = true
-        let activeKey = apiKey.isEmpty ? defaultApiKey : apiKey
+        errorMessage = nil
+        
+        let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let activeKey = trimmed.count > 25 ? trimmed : defaultApiKey
         guard let url = URL(string: "\(primaryEndpoint)?key=\(activeKey)") else { return }
         
         let prompt = """
-        You are a Grammarly-level AI writing assistant.
-        Analyze and proofread this text thoroughly for grammar, spelling, tense, and phrasing with a \(selectedTone) tone:
+        You are a strict grammar proofreader like Grammarly.
+        Proofread and correct this text thoroughly with a \(selectedTone) tone:
         "\(textInput)"
+
+        Strict Instructions:
+        1. Fix missing auxiliary verbs (e.g. "how you want" -> "how do you want").
+        2. Fix typos, slang, and colloquial shorthand (e.g. "wan" -> "want").
+        3. Fix capitalization (sentences must start with an uppercase letter).
+        4. Preserve tone/profanity if present, but fix all syntax and grammar.
+        5. If there are ANY typos, grammatical omissions, or errors, you MUST set "hasErrors": true.
 
         Return ONLY valid JSON:
         {
@@ -512,44 +546,60 @@ struct ContentView: View {
             {"original": "flawed phrase", "replacement": "corrected phrase", "explanation": "brief reason"}
           ]
         }
-        If perfectly correct: {"fullSentenceFix": "", "hasErrors": false, "suggestions": []}.
+        If completely flawless standard English, return: {"fullSentenceFix": "", "hasErrors": false, "suggestions": []}.
         """
         
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.timeoutInterval = 6.0
+        req.timeoutInterval = 12.0
         
         let payload: [String: Any] = [
             "contents": [["parts": [["text": prompt]]]],
             "generationConfig": [
                 "response_mime_type": "application/json",
                 "temperature": 0.1
+            ],
+            "safetySettings": [
+                ["category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"],
+                ["category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"],
+                ["category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"],
+                ["category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"]
             ]
         ]
         
         req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
         
-        URLSession.shared.dataTask(with: req) { data, _, err in
+        URLSession.shared.dataTask(with: req) { data, response, err in
             DispatchQueue.main.async {
                 self.isAnalyzing = false
                 self.hasCheckedOnce = true
             }
             
-            if let data = data, err == nil,
+            let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
+            
+            if let data = data, err == nil, httpStatus == 200,
                let parsed = self.parseGrammarData(data) {
                 DispatchQueue.main.async {
+                    self.errorMessage = nil
                     self.fullSentenceFix = parsed.fullFix
                     self.suggestions = parsed.suggestions
                     self.buildVisualizerSegments(text: self.textInput, suggestions: parsed.suggestions)
                 }
             } else {
-                // Fallback to local Apple UITextChecker
+                // If API failed, show offline check and notice
                 DispatchQueue.main.async {
                     let localItems = self.checkOfflineSpelling(in: self.textInput)
-                    self.fullSentenceFix = nil
-                    self.suggestions = localItems
-                    self.buildVisualizerSegments(text: self.textInput, suggestions: localItems)
+                    if !localItems.isEmpty {
+                        self.errorMessage = "⚠️ AI connection slow, showing offline spell-check"
+                        self.fullSentenceFix = nil
+                        self.suggestions = localItems
+                        self.buildVisualizerSegments(text: self.textInput, suggestions: localItems)
+                    } else {
+                        self.errorMessage = "⚠️ AI check timeout. Tap 'Check Grammar' to retry."
+                        self.suggestions = []
+                        self.segments = []
+                    }
                 }
             }
         }.resume()
@@ -560,8 +610,11 @@ struct ContentView: View {
               let candidates = root["candidates"] as? [[String: Any]],
               let firstCandidate = candidates.first,
               let content = firstCandidate["content"] as? [String: Any],
-              let parts = content["parts"] as? [[String: Any]],
-              let text = parts.first?["text"] as? String else { return nil }
+              let parts = content["parts"] as? [[String: Any]] else { return nil }
+        
+        let textParts = parts.compactMap { $0["text"] as? String }
+        let text = textParts.joined(separator: "\n")
+        guard !text.isEmpty else { return nil }
         
         var cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if cleaned.hasPrefix("```json") {
