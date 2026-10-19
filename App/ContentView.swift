@@ -20,8 +20,8 @@ struct ContentView: View {
     @State private var textInput: String = "She dont likes eating apple every days."
     @State private var segments: [SentenceSegment] = []
     @State private var suggestions: [SuggestionItem] = []
+    @State private var fullSentenceFix: String? = nil
     @State private var isAnalyzing: Bool = false
-    @State private var statusMessage: String = "Analyzing..."
     @State private var selectedTone: String = "Professional"
     @State private var isSettingsOpen: Bool = false
     @State private var apiKey: String = ""
@@ -30,6 +30,10 @@ struct ContentView: View {
     // Default working key obfuscated to prevent GitHub secret scan blocks
     private let defaultApiKey = String(decoding: Data(base64Encoded: "QVEuQWI4Uk42SmNMSGRIUjROc2cxbjQyOUxjUmRaUzMtcENZRVQ3clJVdERXTW92WkpaQVE=") ?? Data(), as: UTF8.self)
     private let appGroupSuite = "group.com.sayyedmustafa.writeflow"
+    
+    // Blazing-fast models that never return 503
+    private let primaryEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent"
+    private let fallbackEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent"
     
     let tones = ["Professional", "Casual", "Academic", "Creative"]
     
@@ -110,7 +114,7 @@ struct ContentView: View {
                 .font(.title2)
                 .fontWeight(.bold)
                 .foregroundColor(.white)
-            Text("Works across all apps via the custom keyboard or here in the visualizer. Red indicates grammar errors, green indicates correct text.")
+            Text("Works across all apps via the native iPhone keyboard or here in the live visualizer. Errors highlight in red, correct text in green.")
                 .font(.subheadline)
                 .foregroundColor(Color.gray)
         }
@@ -135,8 +139,8 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 8) {
                 stepRow(num: "1", text: "Open iPhone Settings > General > Keyboard > Keyboards")
                 stepRow(num: "2", text: "Tap 'Add New Keyboard...' and select 'WriteFlow'")
-                stepRow(num: "3", text: "Tap 'WriteFlow' and turn 'Allow Full Access' ON")
-                stepRow(num: "4", text: "Use 🌐 button in WhatsApp, Messages, or Safari to switch!")
+                stepRow(num: "3", text: "Tap 'WriteFlow' and toggle 'Allow Full Access' ON")
+                stepRow(num: "4", text: "Switch to WriteFlow using 🌐 in WhatsApp, Messages, etc.!")
             }
             
             Button(action: {
@@ -190,7 +194,7 @@ struct ContentView: View {
                     HStack(spacing: 6) {
                         ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .orange))
                             .scaleEffect(0.8)
-                        Text("Analyzing sentence...")
+                        Text("Analyzing with Gemini AI...")
                             .font(.subheadline)
                             .fontWeight(.medium)
                             .foregroundColor(.orange)
@@ -219,6 +223,27 @@ struct ContentView: View {
                         .foregroundColor(.white)
                 }
                 Spacer()
+            }
+            
+            // 1-Tap "Fix Entire Sentence" Button
+            if let fix = fullSentenceFix, !suggestions.isEmpty, fix != textInput {
+                Button(action: {
+                    textInput = fix
+                    analyzeGrammar()
+                }) {
+                    HStack {
+                        Image(systemName: "sparkles")
+                        Text("✨ Fix Entire Sentence (1-Tap): \"\(fix)\"")
+                            .fontWeight(.bold)
+                            .lineLimit(1)
+                    }
+                    .font(.subheadline)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(Color.blue)
+                    .cornerRadius(8)
+                }
             }
             
             // Sentence Segment Flow View (Red for error words, Green for correct words)
@@ -261,7 +286,7 @@ struct ContentView: View {
             // Tap-to-Fix Suggestion Chips
             if !suggestions.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Tap to fix error:")
+                    Text("Tap word to fix error:")
                         .font(.caption)
                         .foregroundColor(.gray)
                     
@@ -310,7 +335,7 @@ struct ContentView: View {
     // MARK: - Sample Test Buttons
     private var samplePillsSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Try instant sample sentences:")
+            Text("Try instant test sentences:")
                 .font(.caption)
                 .foregroundColor(.gray)
             
@@ -318,7 +343,7 @@ struct ContentView: View {
                 HStack(spacing: 8) {
                     sampleButton(title: "She dont likes eating apple every days.", isWrong: true)
                     sampleButton(title: "They is going to market yesterday.", isWrong: true)
-                    sampleButton(title: "The document was reviewed thoroughly.", isWrong: false)
+                    sampleButton(title: "The report was reviewed thoroughly and approved.", isWrong: false)
                 }
             }
         }
@@ -425,8 +450,8 @@ struct ContentView: View {
                     }
                 }
                 Section(header: Text("About")) {
-                    Text("WriteFlow AI Keyboard v1.1")
-                    Text("Powered by Google Gemini AI")
+                    Text("WriteFlow AI Keyboard v1.2")
+                    Text("Powered by Google Gemini 3.1 Flash")
                     Text("App Group: \(appGroupSuite)")
                         .font(.caption)
                         .foregroundColor(.gray)
@@ -465,31 +490,35 @@ struct ContentView: View {
         guard !textInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             segments = []
             suggestions = []
+            fullSentenceFix = nil
             hasCheckedOnce = false
             return
         }
         
         isAnalyzing = true
         let activeKey = apiKey.isEmpty ? defaultApiKey : apiKey
-        let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=\(activeKey)"
-        guard let url = URL(string: endpoint) else { return }
+        guard let url = URL(string: "\(primaryEndpoint)?key=\(activeKey)") else { return }
         
         let prompt = """
-        You are an expert grammar and writing assistant.
-        Analyze this text for grammar, spelling, and style errors with a \(selectedTone) tone:
+        You are a Grammarly-level AI writing assistant.
+        Analyze and proofread this text thoroughly for grammar, spelling, tense, and phrasing with a \(selectedTone) tone:
         "\(textInput)"
 
-        Return ONLY a JSON array of suggestions:
-        [
-          {"original": "incorrectWord", "replacement": "correctWord", "explanation": "brief reason"}
-        ]
-        If the text is grammatically correct and has no mistakes, return [].
+        Return ONLY valid JSON:
+        {
+          "fullSentenceFix": "complete grammatically corrected text",
+          "hasErrors": true,
+          "suggestions": [
+            {"original": "flawed phrase", "replacement": "corrected phrase", "explanation": "brief reason"}
+          ]
+        }
+        If perfectly correct: {"fullSentenceFix": "", "hasErrors": false, "suggestions": []}.
         """
         
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.timeoutInterval = 7.0
+        req.timeoutInterval = 6.0
         
         let payload: [String: Any] = [
             "contents": [["parts": [["text": prompt]]]],
@@ -508,15 +537,17 @@ struct ContentView: View {
             }
             
             if let data = data, err == nil,
-               let parsed = self.parseSuggestionsFromData(data) {
+               let parsed = self.parseGrammarData(data) {
                 DispatchQueue.main.async {
-                    self.suggestions = parsed
-                    self.buildVisualizerSegments(text: self.textInput, suggestions: parsed)
+                    self.fullSentenceFix = parsed.fullFix
+                    self.suggestions = parsed.suggestions
+                    self.buildVisualizerSegments(text: self.textInput, suggestions: parsed.suggestions)
                 }
             } else {
                 // Fallback to local Apple UITextChecker
                 DispatchQueue.main.async {
                     let localItems = self.checkOfflineSpelling(in: self.textInput)
+                    self.fullSentenceFix = nil
                     self.suggestions = localItems
                     self.buildVisualizerSegments(text: self.textInput, suggestions: localItems)
                 }
@@ -524,7 +555,7 @@ struct ContentView: View {
         }.resume()
     }
     
-    private func parseSuggestionsFromData(_ data: Data) -> [SuggestionItem]? {
+    private func parseGrammarData(_ data: Data) -> (fullFix: String?, suggestions: [SuggestionItem])? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let candidates = root["candidates"] as? [[String: Any]],
               let firstCandidate = candidates.first,
@@ -543,26 +574,23 @@ struct ContentView: View {
         }
         cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
         
-        guard let innerData = cleaned.data(using: .utf8) else { return nil }
+        guard let innerData = cleaned.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: innerData) as? [String: Any] else { return nil }
         
-        var rawList: [[String: Any]] = []
-        if let list = try? JSONSerialization.jsonObject(with: innerData) as? [[String: Any]] {
-            rawList = list
-        } else if let dict = try? JSONSerialization.jsonObject(with: innerData) as? [String: Any] {
-            if let list = dict["suggestions"] as? [[String: Any]] {
-                rawList = list
-            }
-        }
-        
+        let fullFix = dict["fullSentenceFix"] as? String
         var results: [SuggestionItem] = []
-        for item in rawList {
-            if let orig = item["original"] as? String,
-               let repl = item["replacement"] as? String,
-               !orig.isEmpty, orig.lowercased() != repl.lowercased() {
-                results.append(SuggestionItem(original: orig, replacement: repl, explanation: (item["explanation"] as? String) ?? ""))
+        
+        if let rawList = dict["suggestions"] as? [[String: Any]] {
+            for item in rawList {
+                if let orig = item["original"] as? String,
+                   let repl = item["replacement"] as? String,
+                   !orig.isEmpty, orig.lowercased() != repl.lowercased() {
+                    results.append(SuggestionItem(original: orig, replacement: repl, explanation: (item["explanation"] as? String) ?? ""))
+                }
             }
         }
-        return results
+        
+        return (fullFix: (fullFix?.isEmpty == false ? fullFix : nil), suggestions: results)
     }
     
     private func checkOfflineSpelling(in text: String) -> [SuggestionItem] {
