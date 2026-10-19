@@ -39,9 +39,11 @@ function withKeyboardTarget(config) {
     const filesToCopy = ['KeyboardViewController.swift', 'Info.plist', 'KeyboardExtension.entitlements'];
     filesToCopy.forEach((file) => {
       const src = path.join(sourceDir, file);
-      const dest = path.join(targetDir, file);
+      const destTarget = path.join(targetDir, file);
+      const destRoot = path.join(platformProjectRoot, file);
       if (fs.existsSync(src)) {
-        fs.copyFileSync(src, dest);
+        fs.copyFileSync(src, destTarget);
+        fs.copyFileSync(src, destRoot);
       }
     });
 
@@ -95,6 +97,8 @@ function withKeyboardTarget(config) {
         buildSettings.IPHONEOS_DEPLOYMENT_TARGET = '15.1';
         buildSettings.CURRENT_PROJECT_VERSION = '1';
         buildSettings.MARKETING_VERSION = '1.0.0';
+        buildSettings.SKIP_INSTALL = 'YES';
+        buildSettings.ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = 'NO';
       });
     }
 
