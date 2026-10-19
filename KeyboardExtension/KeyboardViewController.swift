@@ -1,6 +1,11 @@
 import UIKit
 
-class KeyboardViewController: UIInputViewController {
+class KeyboardViewController: UIInputViewController, UIInputViewAudioFeedback {
+
+    // Audio click feedback for native iOS feel
+    var enableInputClicksWhenVisible: Bool {
+        return true
+    }
 
     // MARK: - API & Endpoints
     private let appGroupIdentifier = "group.com.sayyedmustafa.writeflow"
@@ -8,15 +13,15 @@ class KeyboardViewController: UIInputViewController {
     
     // Blazing-fast models (~1s response time, zero 503 errors)
     private let primaryEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent"
-    private let fallbackEndpoint1 = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent"
-    private let fallbackEndpoint2 = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent"
+    private let fallbackEndpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent"
 
-    // MARK: - UI Components
-    private var suggestionsBar: UIView!
+    // MARK: - UI Components (Grammarly-Style Assistant Toolbar)
+    private var toolbarContainer: UIView!
+    private var grammarlyLogoButton: UIButton!
+    private var grammarlyStatusBadge: UILabel!
+    private var activitySpinner: UIActivityIndicatorView!
     private var suggestionsScrollView: UIScrollView!
     private var suggestionsStackView: UIStackView!
-    private var statusIndicator: UIView!
-    private var statusLabel: UILabel!
     private var keyboardView: UIView!
 
     // MARK: - Haptic Feedback Generators
@@ -27,20 +32,39 @@ class KeyboardViewController: UIInputViewController {
 
     // MARK: - State
     private var isShifted = false
+    private var isCapsLock = false
     private var isSymbolMode = false
+    private var isAltSymbolMode = false
+    private var lastShiftTapTime: TimeInterval = 0
+    private var lastSpaceTapTime: TimeInterval = 0
     private var analysisTimer: Timer?
     private var deleteRepeatTimer: Timer?
     private var lastAnalyzedText = ""
     private var currentFullSentenceFix: String?
     private var currentFlawedSentence: String?
+    private var isChecking = false
 
-    // Color Palette matching Native iOS Dark Keyboard exactly
+    // Color Palette matching Native iOS Dark Keyboard & Grammarly
     private let keyboardBgColor = UIColor(red: 0.11, green: 0.11, blue: 0.12, alpha: 1.0)
     private let normalKeyColor = UIColor(red: 0.38, green: 0.38, blue: 0.40, alpha: 1.0)
     private let normalKeyHighlightColor = UIColor(red: 0.58, green: 0.58, blue: 0.60, alpha: 1.0)
     private let specialKeyColor = UIColor(red: 0.21, green: 0.21, blue: 0.22, alpha: 1.0)
     private let specialKeyHighlightColor = UIColor(red: 0.34, green: 0.34, blue: 0.36, alpha: 1.0)
-    private let accentBlueColor = UIColor(red: 0.10, green: 0.50, blue: 0.98, alpha: 1.0)
+    
+    // Grammarly Branding Colors
+    private let grammarlyGreen = UIColor(red: 0.08, green: 0.72, blue: 0.52, alpha: 1.0)
+    private let grammarlyCoral = UIColor(red: 0.98, green: 0.38, blue: 0.38, alpha: 1.0)
+    private let grammarlyBlue = UIColor(red: 0.10, green: 0.55, blue: 0.98, alpha: 1.0)
+
+    // Dedicated Network Session with Cellular & Connectivity Guarantee
+    private lazy var networkSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 15.0
+        config.timeoutIntervalForResource = 30.0
+        config.allowsCellularAccess = true
+        config.waitsForConnectivity = true
+        return URLSession(configuration: config)
+    }()
 
     // MARK: - Lifecycle
     override func viewDidLoad() {
@@ -61,38 +85,57 @@ class KeyboardViewController: UIInputViewController {
         debounceAnalysis(immediate: false)
     }
 
-    // MARK: - UI Setup
+    // MARK: - UI Setup (Exact Grammarly Keyboard Architecture)
     private func setupUI() {
         view.backgroundColor = keyboardBgColor
 
-        // 1. Sleek Grammarly-Style Assistant Toolbar
-        suggestionsBar = UIView()
-        suggestionsBar.translatesAutoresizingMaskIntoConstraints = false
-        suggestionsBar.backgroundColor = UIColor(red: 0.13, green: 0.13, blue: 0.15, alpha: 1.0)
+        // 1. Top Grammarly Assistant Strip (Height 46pt)
+        toolbarContainer = UIView()
+        toolbarContainer.translatesAutoresizingMaskIntoConstraints = false
+        toolbarContainer.backgroundColor = UIColor(red: 0.13, green: 0.13, blue: 0.15, alpha: 1.0)
         
         let hairline = UIView()
         hairline.translatesAutoresizingMaskIntoConstraints = false
-        hairline.backgroundColor = UIColor(white: 0.24, alpha: 1.0)
-        suggestionsBar.addSubview(hairline)
-        view.addSubview(suggestionsBar)
+        hairline.backgroundColor = UIColor(white: 0.22, alpha: 1.0)
+        toolbarContainer.addSubview(hairline)
+        view.addSubview(toolbarContainer)
 
-        statusIndicator = UIView()
-        statusIndicator.translatesAutoresizingMaskIntoConstraints = false
-        statusIndicator.layer.cornerRadius = 4.0
-        statusIndicator.backgroundColor = UIColor.systemGreen
-        suggestionsBar.addSubview(statusIndicator)
+        // 2. Circular Grammarly Logo Widget on the Left (Interactive)
+        grammarlyLogoButton = UIButton(type: .custom)
+        grammarlyLogoButton.translatesAutoresizingMaskIntoConstraints = false
+        grammarlyLogoButton.layer.cornerRadius = 16
+        grammarlyLogoButton.layer.borderWidth = 1.5
+        grammarlyLogoButton.layer.borderColor = grammarlyGreen.cgColor
+        grammarlyLogoButton.backgroundColor = UIColor(white: 0.18, alpha: 1.0)
+        grammarlyLogoButton.setTitle("G", for: .normal)
+        grammarlyLogoButton.setTitleColor(grammarlyGreen, for: .normal)
+        grammarlyLogoButton.titleLabel?.font = UIFont.systemFont(ofSize: 15, weight: .black)
+        grammarlyLogoButton.addTarget(self, action: #selector(grammarlyLogoTapped), for: .touchUpInside)
+        toolbarContainer.addSubview(grammarlyLogoButton)
 
-        statusLabel = UILabel()
-        statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel.font = UIFont.systemFont(ofSize: 11, weight: .bold)
-        statusLabel.textColor = UIColor.systemGreen
-        statusLabel.text = "AI"
-        suggestionsBar.addSubview(statusLabel)
+        // Error Badge Counter on Logo (like Grammarly)
+        grammarlyStatusBadge = UILabel()
+        grammarlyStatusBadge.translatesAutoresizingMaskIntoConstraints = false
+        grammarlyStatusBadge.layer.cornerRadius = 7
+        grammarlyStatusBadge.layer.masksToBounds = true
+        grammarlyStatusBadge.backgroundColor = grammarlyCoral
+        grammarlyStatusBadge.textColor = .white
+        grammarlyStatusBadge.font = UIFont.systemFont(ofSize: 9, weight: .bold)
+        grammarlyStatusBadge.textAlignment = .center
+        grammarlyStatusBadge.isHidden = true
+        toolbarContainer.addSubview(grammarlyStatusBadge)
 
+        activitySpinner = UIActivityIndicatorView(style: .medium)
+        activitySpinner.translatesAutoresizingMaskIntoConstraints = false
+        activitySpinner.color = grammarlyGreen
+        activitySpinner.hidesWhenStopped = true
+        toolbarContainer.addSubview(activitySpinner)
+
+        // 3. Scrollable Grammarly Suggestions Strip
         suggestionsScrollView = UIScrollView()
         suggestionsScrollView.translatesAutoresizingMaskIntoConstraints = false
         suggestionsScrollView.showsHorizontalScrollIndicator = false
-        suggestionsBar.addSubview(suggestionsScrollView)
+        toolbarContainer.addSubview(suggestionsScrollView)
 
         suggestionsStackView = UIStackView()
         suggestionsStackView.translatesAutoresizingMaskIntoConstraints = false
@@ -101,35 +144,40 @@ class KeyboardViewController: UIInputViewController {
         suggestionsStackView.alignment = .center
         suggestionsScrollView.addSubview(suggestionsStackView)
 
-        // 2. Native iOS Keypad View Container
+        // 4. Native iOS QWERTY Keypad
         keyboardView = UIView()
         keyboardView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(keyboardView)
 
         // Constraints
         NSLayoutConstraint.activate([
-            suggestionsBar.topAnchor.constraint(equalTo: view.topAnchor),
-            suggestionsBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            suggestionsBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            suggestionsBar.heightAnchor.constraint(equalToConstant: 44),
+            toolbarContainer.topAnchor.constraint(equalTo: view.topAnchor),
+            toolbarContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            toolbarContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            toolbarContainer.heightAnchor.constraint(equalToConstant: 46),
 
-            hairline.leadingAnchor.constraint(equalTo: suggestionsBar.leadingAnchor),
-            hairline.trailingAnchor.constraint(equalTo: suggestionsBar.trailingAnchor),
-            hairline.bottomAnchor.constraint(equalTo: suggestionsBar.bottomAnchor),
+            hairline.leadingAnchor.constraint(equalTo: toolbarContainer.leadingAnchor),
+            hairline.trailingAnchor.constraint(equalTo: toolbarContainer.trailingAnchor),
+            hairline.bottomAnchor.constraint(equalTo: toolbarContainer.bottomAnchor),
             hairline.heightAnchor.constraint(equalToConstant: 0.5),
 
-            statusIndicator.leadingAnchor.constraint(equalTo: suggestionsBar.leadingAnchor, constant: 10),
-            statusIndicator.centerYAnchor.constraint(equalTo: suggestionsBar.centerYAnchor),
-            statusIndicator.widthAnchor.constraint(equalToConstant: 8),
-            statusIndicator.heightAnchor.constraint(equalToConstant: 8),
+            grammarlyLogoButton.leadingAnchor.constraint(equalTo: toolbarContainer.leadingAnchor, constant: 10),
+            grammarlyLogoButton.centerYAnchor.constraint(equalTo: toolbarContainer.centerYAnchor),
+            grammarlyLogoButton.widthAnchor.constraint(equalToConstant: 32),
+            grammarlyLogoButton.heightAnchor.constraint(equalToConstant: 32),
 
-            statusLabel.leadingAnchor.constraint(equalTo: statusIndicator.trailingAnchor, constant: 5),
-            statusLabel.centerYAnchor.constraint(equalTo: suggestionsBar.centerYAnchor),
+            grammarlyStatusBadge.topAnchor.constraint(equalTo: grammarlyLogoButton.topAnchor, constant: -3),
+            grammarlyStatusBadge.trailingAnchor.constraint(equalTo: grammarlyLogoButton.trailingAnchor, constant: 4),
+            grammarlyStatusBadge.widthAnchor.constraint(greaterThanOrEqualToConstant: 14),
+            grammarlyStatusBadge.heightAnchor.constraint(equalToConstant: 14),
 
-            suggestionsScrollView.leadingAnchor.constraint(equalTo: statusLabel.trailingAnchor, constant: 8),
-            suggestionsScrollView.trailingAnchor.constraint(equalTo: suggestionsBar.trailingAnchor, constant: -10),
-            suggestionsScrollView.topAnchor.constraint(equalTo: suggestionsBar.topAnchor),
-            suggestionsScrollView.bottomAnchor.constraint(equalTo: suggestionsBar.bottomAnchor),
+            activitySpinner.centerXAnchor.constraint(equalTo: grammarlyLogoButton.centerXAnchor),
+            activitySpinner.centerYAnchor.constraint(equalTo: grammarlyLogoButton.centerYAnchor),
+
+            suggestionsScrollView.leadingAnchor.constraint(equalTo: grammarlyLogoButton.trailingAnchor, constant: 10),
+            suggestionsScrollView.trailingAnchor.constraint(equalTo: toolbarContainer.trailingAnchor, constant: -10),
+            suggestionsScrollView.topAnchor.constraint(equalTo: toolbarContainer.topAnchor),
+            suggestionsScrollView.bottomAnchor.constraint(equalTo: toolbarContainer.bottomAnchor),
 
             suggestionsStackView.leadingAnchor.constraint(equalTo: suggestionsScrollView.leadingAnchor),
             suggestionsStackView.trailingAnchor.constraint(equalTo: suggestionsScrollView.trailingAnchor),
@@ -137,7 +185,7 @@ class KeyboardViewController: UIInputViewController {
             suggestionsStackView.bottomAnchor.constraint(equalTo: suggestionsScrollView.bottomAnchor),
             suggestionsStackView.heightAnchor.constraint(equalTo: suggestionsScrollView.heightAnchor),
 
-            keyboardView.topAnchor.constraint(equalTo: suggestionsBar.bottomAnchor, constant: 6),
+            keyboardView.topAnchor.constraint(equalTo: toolbarContainer.bottomAnchor, constant: 6),
             keyboardView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 3),
             keyboardView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -3),
             keyboardView.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -4),
@@ -150,22 +198,23 @@ class KeyboardViewController: UIInputViewController {
 
     private func showDefaultAssistantPrompt() {
         clearSuggestions()
-        statusIndicator.backgroundColor = UIColor.systemGreen
-        statusLabel.text = "AI"
-        statusLabel.textColor = UIColor.systemGreen
+        setLogoState(mode: .clean)
+
+        // Check if user has an API key in clipboard that they can paste with 1 tap
+        checkClipboardForApiKey()
 
         if !hasFullAccess {
             let label = UILabel()
-            label.text = "⚠️ Tap: Enable 'Full Access' in Settings"
+            label.text = "⚠️ Enable 'Allow Full Access' in iOS Settings"
             label.textColor = UIColor.systemYellow
             label.font = UIFont.systemFont(ofSize: 12, weight: .semibold)
             suggestionsStackView.addArrangedSubview(label)
         } else {
-            // Show Tone Suggestions for Clean State
-            addToneButton(title: "✨ WriteFlow AI Active", isHeader: true)
-            addToneButton(title: "👔 Professional", tone: "Professional")
-            addToneButton(title: "⚡ Shorten", tone: "Concise")
-            addToneButton(title: "💬 Casual", tone: "Casual")
+            // Clean state Grammarly tone pills
+            addTonePill(title: "✨ All Clear", isStatic: true)
+            addTonePill(title: "👔 Professional", tone: "Professional")
+            addTonePill(title: "⚡ Shorten", tone: "Concise")
+            addTonePill(title: "💬 Casual", tone: "Casual")
         }
     }
 
@@ -176,18 +225,95 @@ class KeyboardViewController: UIInputViewController {
         }
     }
 
+    enum LogoMode {
+        case clean
+        case checking
+        case errors(count: Int)
+        case offline
+    }
+
+    private func setLogoState(mode: LogoMode) {
+        switch mode {
+        case .clean:
+            activitySpinner.stopAnimating()
+            grammarlyLogoButton.setTitle("G", for: .normal)
+            grammarlyLogoButton.layer.borderColor = grammarlyGreen.cgColor
+            grammarlyLogoButton.setTitleColor(grammarlyGreen, for: .normal)
+            grammarlyStatusBadge.isHidden = true
+        case .checking:
+            grammarlyLogoButton.setTitle("", for: .normal)
+            activitySpinner.startAnimating()
+            grammarlyLogoButton.layer.borderColor = grammarlyBlue.cgColor
+            grammarlyStatusBadge.isHidden = true
+        case .errors(let count):
+            activitySpinner.stopAnimating()
+            grammarlyLogoButton.setTitle("G", for: .normal)
+            grammarlyLogoButton.layer.borderColor = grammarlyCoral.cgColor
+            grammarlyLogoButton.setTitleColor(grammarlyCoral, for: .normal)
+            grammarlyStatusBadge.text = "\(count)"
+            grammarlyStatusBadge.isHidden = false
+        case .offline:
+            activitySpinner.stopAnimating()
+            grammarlyLogoButton.setTitle("!", for: .normal)
+            grammarlyLogoButton.layer.borderColor = UIColor.systemYellow.cgColor
+            grammarlyLogoButton.setTitleColor(UIColor.systemYellow, for: .normal)
+            grammarlyStatusBadge.isHidden = true
+        }
+    }
+
+    @objc private func grammarlyLogoTapped() {
+        mediumHaptic.impactOccurred()
+        checkCurrentContext(immediate: true)
+    }
+
+    // MARK: - 1-Tap Clipboard API Key Importer
+    private func checkClipboardForApiKey() {
+        guard UIPasteboard.general.hasStrings,
+              let clip = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+              clip.count > 25, (clip.hasPrefix("AIza") || clip.hasPrefix("AQ.")) else { return }
+
+        let importBtn = UIButton(type: .custom)
+        importBtn.setTitle("🔑 Tap to Use Copied API Key", for: .normal)
+        importBtn.setTitleColor(.white, for: .normal)
+        importBtn.titleLabel?.font = UIFont.systemFont(ofSize: 12, weight: .bold)
+        importBtn.backgroundColor = grammarlyBlue
+        importBtn.layer.cornerRadius = 13
+        importBtn.contentEdgeInsets = UIEdgeInsets(top: 4, left: 10, bottom: 4, right: 10)
+        importBtn.addAction(UIAction { [weak self] _ in
+            UserDefaults.standard.set(clip, forKey: "custom_gemini_api_key")
+            self?.notificationHaptic.notificationOccurred(.success)
+            self?.showDefaultAssistantPrompt()
+        }, for: .touchUpInside)
+
+        suggestionsStackView.addArrangedSubview(importBtn)
+    }
+
     // MARK: - Keypad Generation (Exact iPhone Geometry & SF Symbols)
     private func buildKeys() {
         for subview in keyboardView.subviews {
             subview.removeFromSuperview()
         }
 
-        let row1Letters = isSymbolMode ? ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"] :
-            (isShifted ? ["Q","W","E","R","T","Y","U","I","O","P"] : ["q","w","e","r","t","y","u","i","o","p"])
-        let row2Letters = isSymbolMode ? ["-", "/", ":", ";", "(", ")", "$", "&", "@", "\""] :
-            (isShifted ? ["A","S","D","F","G","H","J","K","L"] : ["a","s","d","f","g","h","j","k","l"])
-        let row3Letters = isSymbolMode ? [".", ",", "?", "!", "'"] :
-            (isShifted ? ["Z","X","C","V","B","N","M"] : ["z","x","c","v","b","n","m"])
+        let isUpper = isShifted || isCapsLock
+        let row1Letters: [String]
+        let row2Letters: [String]
+        let row3Letters: [String]
+
+        if isSymbolMode {
+            if isAltSymbolMode {
+                row1Letters = ["[", "]", "{", "}", "#", "%", "^", "*", "+", "="]
+                row2Letters = ["_", "\\", "|", "~", "<", ">", "€", "£", "¥", "•"]
+                row3Letters = [".", ",", "?", "!", "'"]
+            } else {
+                row1Letters = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+                row2Letters = ["-", "/", ":", ";", "(", ")", "$", "&", "@", "\""]
+                row3Letters = [".", ",", "?", "!", "'"]
+            }
+        } else {
+            row1Letters = isUpper ? ["Q","W","E","R","T","Y","U","I","O","P"] : ["q","w","e","r","t","y","u","i","o","p"]
+            row2Letters = isUpper ? ["A","S","D","F","G","H","J","K","L"] : ["a","s","d","f","g","h","j","k","l"]
+            row3Letters = isUpper ? ["Z","X","C","V","B","N","M"] : ["z","x","c","v","b","n","m"]
+        }
 
         let mainStack = UIStackView()
         mainStack.translatesAutoresizingMaskIntoConstraints = false
@@ -206,40 +332,46 @@ class KeyboardViewController: UIInputViewController {
         // Row 1 (10 Keys)
         mainStack.addArrangedSubview(createRow(keys: row1Letters))
 
-        // Row 2 (9 Keys, centered like native iOS with 16pt padding)
+        // Row 2 (Centered like native iOS with margin)
         let row2Container = UIStackView()
         row2Container.axis = .horizontal
         row2Container.spacing = 6
         let spacerL = UIView()
         let spacerR = UIView()
+        let margin: CGFloat = (isSymbolMode) ? 8 : 16
         NSLayoutConstraint.activate([
-            spacerL.widthAnchor.constraint(equalToConstant: 16),
-            spacerR.widthAnchor.constraint(equalToConstant: 16)
+            spacerL.widthAnchor.constraint(equalToConstant: margin),
+            spacerR.widthAnchor.constraint(equalToConstant: margin)
         ])
         row2Container.addArrangedSubview(spacerL)
         row2Container.addArrangedSubview(createRow(keys: row2Letters))
         row2Container.addArrangedSubview(spacerR)
         mainStack.addArrangedSubview(row2Container)
 
-        // Row 3 (Shift, 7 Keys, Delete)
+        // Row 3 (Shift / Symbols Switcher, Keys, Delete)
         let row3 = UIStackView()
         row3.axis = .horizontal
         row3.spacing = 6
         row3.distribution = .fillProportionally
 
-        // Native SF Symbol Shift Key
-        let shiftBtn = createSpecialKey(systemImage: isShifted ? "shift.fill" : "shift", flex: 1.25)
-        if isShifted {
-            shiftBtn.backgroundColor = UIColor(white: 0.90, alpha: 1.0)
-            shiftBtn.tintColor = .black
+        if isSymbolMode {
+            let altSwitchBtn = createSpecialKey(title: isAltSymbolMode ? "123" : "#+=", flex: 1.25)
+            altSwitchBtn.addTarget(self, action: #selector(toggleAltSymbolMode), for: .touchUpInside)
+            row3.addArrangedSubview(altSwitchBtn)
+        } else {
+            let shiftIcon = isCapsLock ? "capslock.fill" : (isShifted ? "shift.fill" : "shift")
+            let shiftBtn = createSpecialKey(systemImage: shiftIcon, flex: 1.25)
+            if isUpper {
+                shiftBtn.backgroundColor = UIColor(white: 0.90, alpha: 1.0)
+                shiftBtn.tintColor = .black
+            }
+            shiftBtn.addTarget(self, action: #selector(toggleShift), for: .touchUpInside)
+            row3.addArrangedSubview(shiftBtn)
         }
-        shiftBtn.addTarget(self, action: #selector(toggleShift), for: .touchUpInside)
-        row3.addArrangedSubview(shiftBtn)
 
         let row3LetterStack = createRow(keys: row3Letters)
         row3.addArrangedSubview(row3LetterStack)
 
-        // Native SF Symbol Backspace Key with Rapid Repeating Delete
         let deleteBtn = createSpecialKey(systemImage: "delete.left.fill", flex: 1.25)
         deleteBtn.addTarget(self, action: #selector(deleteTouchDown), for: .touchDown)
         deleteBtn.addTarget(self, action: #selector(deleteTouchUp), for: [.touchUpInside, .touchUpOutside, .touchCancel])
@@ -298,7 +430,6 @@ class KeyboardViewController: UIInputViewController {
         btn.setTitleColor(.white, for: .normal)
         btn.titleLabel?.font = UIFont.systemFont(ofSize: 22.5, weight: .regular)
         btn.backgroundColor = normalKeyColor
-        
         btn.layer.cornerRadius = 5.0
         btn.layer.shadowColor = UIColor.black.cgColor
         btn.layer.shadowOffset = CGSize(width: 0, height: 1.0)
@@ -342,6 +473,7 @@ class KeyboardViewController: UIInputViewController {
     @objc private func keyTouchDown(_ sender: UIButton) {
         sender.backgroundColor = normalKeyHighlightColor
         lightHaptic.impactOccurred()
+        UIDevice.current.playInputClick()
     }
 
     @objc private func keyTouchUp(_ sender: UIButton) {
@@ -351,23 +483,24 @@ class KeyboardViewController: UIInputViewController {
     @objc private func specialKeyTouchDown(_ sender: UIButton) {
         sender.backgroundColor = specialKeyHighlightColor
         rigidHaptic.impactOccurred()
+        UIDevice.current.playInputClick()
     }
 
     @objc private func specialKeyTouchUp(_ sender: UIButton) {
-        if sender.title(for: .normal) == "return" || sender.title(for: .normal) == "123" || sender.title(for: .normal) == "ABC" {
+        if sender.title(for: .normal) == "return" || sender.title(for: .normal) == "123" || sender.title(for: .normal) == "ABC" || sender.title(for: .normal) == "#+=" {
             sender.backgroundColor = specialKeyColor
-        } else if isShifted && sender.image(for: .normal) != nil {
+        } else if (isShifted || isCapsLock) && sender.image(for: .normal) != nil {
             // keep shifted white
         } else {
             sender.backgroundColor = specialKeyColor
         }
     }
 
-    // MARK: - Key Action Handlers
+    // MARK: - Key Actions
     @objc private func keyTapped(_ sender: UIButton) {
         guard let title = sender.title(for: .normal) else { return }
         textDocumentProxy.insertText(title)
-        if isShifted {
+        if isShifted && !isCapsLock {
             isShifted = false
             buildKeys()
         }
@@ -377,12 +510,14 @@ class KeyboardViewController: UIInputViewController {
     @objc private func deleteTouchDown() {
         textDocumentProxy.deleteBackward()
         rigidHaptic.impactOccurred()
+        UIDevice.current.playInputClick()
         debounceAnalysis(immediate: false)
 
         deleteRepeatTimer?.invalidate()
         deleteRepeatTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             self?.textDocumentProxy.deleteBackward()
             self?.rigidHaptic.impactOccurred()
+            UIDevice.current.playInputClick()
             self?.debounceAnalysis(immediate: false)
         }
     }
@@ -393,31 +528,63 @@ class KeyboardViewController: UIInputViewController {
     }
 
     @objc private func handleSpaceTouchDown() {
-        textDocumentProxy.insertText(" ")
+        let now = Date().timeIntervalSince1970
+        if now - lastSpaceTapTime < 0.35 {
+            // Double-tap space shortcut: convert space to ". "
+            textDocumentProxy.deleteBackward()
+            textDocumentProxy.insertText(". ")
+            lastSpaceTapTime = 0
+        } else {
+            textDocumentProxy.insertText(" ")
+            lastSpaceTapTime = now
+        }
         mediumHaptic.impactOccurred()
+        UIDevice.current.playInputClick()
         debounceAnalysis(immediate: true)
     }
 
     @objc private func handleReturnTouchDown() {
         textDocumentProxy.insertText("\n")
         mediumHaptic.impactOccurred()
+        UIDevice.current.playInputClick()
         debounceAnalysis(immediate: true)
     }
 
     @objc private func toggleShift() {
-        isShifted.toggle()
+        let now = Date().timeIntervalSince1970
+        if now - lastShiftTapTime < 0.35 {
+            // Double tap = Caps Lock
+            isCapsLock.toggle()
+            isShifted = isCapsLock
+        } else {
+            if isCapsLock {
+                isCapsLock = false
+                isShifted = false
+            } else {
+                isShifted.toggle()
+            }
+        }
+        lastShiftTapTime = now
         mediumHaptic.impactOccurred()
         buildKeys()
     }
 
     @objc private func toggleSymbolMode() {
         isSymbolMode.toggle()
+        isAltSymbolMode = false
         isShifted = false
+        isCapsLock = false
         mediumHaptic.impactOccurred()
         buildKeys()
     }
 
-    // MARK: - Grammar & Full-Sentence AI Logic
+    @objc private func toggleAltSymbolMode() {
+        isAltSymbolMode.toggle()
+        mediumHaptic.impactOccurred()
+        buildKeys()
+    }
+
+    // MARK: - Grammarly AI Logic & Text Analysis
     private func checkCurrentContext(immediate: Bool = false) {
         guard let context = textDocumentProxy.documentContextBeforeInput, !context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             showDefaultAssistantPrompt()
@@ -460,41 +627,42 @@ class KeyboardViewController: UIInputViewController {
     }
 
     private func getApiKey() -> String {
-        if let shared = UserDefaults(suiteName: appGroupIdentifier)?.string(forKey: "@writing_assistant_api_key")?.trimmingCharacters(in: .whitespacesAndNewlines),
-           shared.count > 25 {
+        // 1. Check local keyboard preference
+        if let custom = UserDefaults.standard.string(forKey: "custom_gemini_api_key")?.trimmingCharacters(in: .whitespacesAndNewlines), custom.count > 25 {
+            return custom
+        }
+        // 2. Check App Group if available
+        if let shared = UserDefaults(suiteName: appGroupIdentifier)?.string(forKey: "@writing_assistant_api_key")?.trimmingCharacters(in: .whitespacesAndNewlines), shared.count > 25 {
             return shared
         }
+        // 3. Fallback to default verified working key
         return defaultApiKey
     }
 
     private func analyzeText(_ sentence: String) {
-        statusIndicator.backgroundColor = UIColor.systemOrange
-        statusLabel.text = "Checking"
-        statusLabel.textColor = UIColor.systemOrange
+        setLogoState(mode: .checking)
 
         // 1. Instant local offline check with Apple UITextChecker
         let localSuggestions = checkOfflineSpelling(in: sentence)
 
-        // If Full Access is off, notify user while showing local offline suggestions
+        // If Full Access is off, notify user
         if !hasFullAccess {
             clearSuggestions()
-            statusIndicator.backgroundColor = UIColor.systemYellow
-            statusLabel.text = "Access"
-            statusLabel.textColor = UIColor.systemYellow
+            setLogoState(mode: .offline)
 
             let label = UILabel()
-            label.text = "⚠️ Full Access required for AI grammar (Settings > WriteFlow)"
+            label.text = "⚠️ Enable 'Allow Full Access' in iOS Settings for AI"
             label.font = UIFont.systemFont(ofSize: 12, weight: .semibold)
             label.textColor = UIColor.systemYellow
             suggestionsStackView.addArrangedSubview(label)
 
             for item in localSuggestions {
-                addSuggestionChip(original: item.original, replacement: item.replacement)
+                addSuggestionCard(original: item.original, replacement: item.replacement)
             }
             return
         }
 
-        // 2. Query High-Speed Gemini Model (gemini-flash-lite-latest) with safetySettings
+        // 2. Query High-Speed Gemini Model with safetySettings
         let apiKey = getApiKey()
         guard let url = URL(string: "\(primaryEndpoint)?key=\(apiKey)") else { return }
 
@@ -524,7 +692,7 @@ class KeyboardViewController: UIInputViewController {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 12.0
+        request.timeoutInterval = 15.0
 
         let payload: [String: Any] = [
             "contents": [["parts": [["text": prompt]]]],
@@ -543,7 +711,7 @@ class KeyboardViewController: UIInputViewController {
         guard let bodyData = try? JSONSerialization.data(withJSONObject: payload) else { return }
         request.httpBody = bodyData
 
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+        networkSession.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else { return }
 
             let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -554,20 +722,27 @@ class KeyboardViewController: UIInputViewController {
                     self.displayResults(fullFix: parsed.fullFix, suggestions: parsed.suggestions, sentence: sentence)
                 }
             } else {
-                // Network error or timeout: Show offline spelling if any, or a clear offline notice
+                // If network timeout or offline
                 DispatchQueue.main.async {
                     if !localSuggestions.isEmpty {
+                        self.setLogoState(mode: .errors(count: localSuggestions.count))
                         self.displayResults(fullFix: nil, suggestions: localSuggestions, sentence: sentence)
                     } else {
-                        self.statusIndicator.backgroundColor = UIColor.systemYellow
-                        self.statusLabel.text = "Offline"
-                        self.statusLabel.textColor = UIColor.systemYellow
+                        self.setLogoState(mode: .offline)
                         self.clearSuggestions()
-                        let label = UILabel()
-                        label.text = "⚠️ Network timeout. Tap to retry"
-                        label.textColor = UIColor.systemYellow
-                        label.font = UIFont.systemFont(ofSize: 12, weight: .medium)
-                        self.suggestionsStackView.addArrangedSubview(label)
+                        
+                        let retryBtn = UIButton(type: .custom)
+                        retryBtn.setTitle("🔄 Tap to Re-check", for: .normal)
+                        retryBtn.setTitleColor(UIColor.systemYellow, for: .normal)
+                        retryBtn.titleLabel?.font = UIFont.systemFont(ofSize: 12.5, weight: .semibold)
+                        retryBtn.layer.cornerRadius = 13
+                        retryBtn.layer.borderWidth = 1.0
+                        retryBtn.layer.borderColor = UIColor.systemYellow.cgColor
+                        retryBtn.contentEdgeInsets = UIEdgeInsets(top: 4, left: 10, bottom: 4, right: 10)
+                        retryBtn.addAction(UIAction { [weak self] _ in
+                            self?.checkCurrentContext(immediate: true)
+                        }, for: .touchUpInside)
+                        self.suggestionsStackView.addArrangedSubview(retryBtn)
                     }
                 }
             }
@@ -580,8 +755,7 @@ class KeyboardViewController: UIInputViewController {
         let sentence = extractActiveSentence(from: context)
         guard !sentence.isEmpty else { return }
 
-        statusIndicator.backgroundColor = UIColor.systemOrange
-        statusLabel.text = "Writing"
+        setLogoState(mode: .checking)
 
         let apiKey = getApiKey()
         guard let url = URL(string: "\(primaryEndpoint)?key=\(apiKey)") else { return }
@@ -595,7 +769,7 @@ class KeyboardViewController: UIInputViewController {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 12.0
+        request.timeoutInterval = 15.0
         let payload: [String: Any] = [
             "contents": [["parts": [["text": prompt]]]],
             "generationConfig": ["response_mime_type": "application/json", "temperature": 0.2],
@@ -608,8 +782,11 @@ class KeyboardViewController: UIInputViewController {
         ]
         request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
 
-        URLSession.shared.dataTask(with: request) { [weak self] data, _, err in
-            guard let self = self, let data = data, err == nil else { return }
+        networkSession.dataTask(with: request) { [weak self] data, _, err in
+            guard let self = self, let data = data, err == nil else {
+                DispatchQueue.main.async { self?.setLogoState(mode: .clean) }
+                return
+            }
             if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let candidates = root["candidates"] as? [[String: Any]],
                let text = candidates.first?["content"] as? [String: Any],
@@ -656,7 +833,6 @@ class KeyboardViewController: UIInputViewController {
               let content = firstCandidate["content"] as? [String: Any],
               let parts = content["parts"] as? [[String: Any]] else { return nil }
 
-        // Join parts to be resilient against thought signatures or multi-part responses
         let textParts = parts.compactMap { $0["text"] as? String }
         let text = textParts.joined(separator: "\n")
         guard !text.isEmpty else { return nil }
@@ -694,84 +870,100 @@ class KeyboardViewController: UIInputViewController {
         return cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    // MARK: - Visual Results & Fix Chips
+    // MARK: - Display Grammarly Suggestion Cards
     private func displayResults(fullFix: String?, suggestions: [(original: String, replacement: String, explanation: String)], sentence: String) {
         clearSuggestions()
 
         if suggestions.isEmpty && (fullFix == nil || fullFix == sentence) {
-            statusIndicator.backgroundColor = UIColor.systemGreen
-            statusLabel.text = "Flawless"
-            statusLabel.textColor = UIColor.systemGreen
-
-            addToneButton(title: "✓ Perfect", isHeader: true)
-            addToneButton(title: "👔 Professional", tone: "Professional")
-            addToneButton(title: "⚡ Shorten", tone: "Concise")
-            addToneButton(title: "💬 Casual", tone: "Casual")
+            setLogoState(mode: .clean)
+            addTonePill(title: "✓ Perfect", isStatic: true)
+            addTonePill(title: "👔 Professional", tone: "Professional")
+            addTonePill(title: "⚡ Shorten", tone: "Concise")
+            addTonePill(title: "💬 Casual", tone: "Casual")
             return
         }
 
-        // Errors Found -> Vibrant Coral Indicator
-        statusIndicator.backgroundColor = UIColor(red: 1.0, green: 0.35, blue: 0.35, alpha: 1.0)
-        statusLabel.text = "\(suggestions.count) Fix\(suggestions.count > 1 ? "es" : "")"
-        statusLabel.textColor = UIColor(red: 1.0, green: 0.45, blue: 0.45, alpha: 1.0)
+        // Errors Found -> Update Grammarly Logo Badge
+        setLogoState(mode: .errors(count: suggestions.count))
 
-        // 1. One-Tap "✨ Fix All" Button (Replaces entire sentence in 1 tap!)
+        // 1. One-Tap Grammarly "✨ Fix All" Card
         if let fullFix = fullFix, fullFix != sentence {
-            let fixAllBtn = UIButton(type: .custom)
-            fixAllBtn.setTitle("✨ Fix All: \"\(fullFix)\"", for: .normal)
-            fixAllBtn.setTitleColor(.white, for: .normal)
-            fixAllBtn.titleLabel?.font = UIFont.systemFont(ofSize: 13, weight: .bold)
-            fixAllBtn.backgroundColor = accentBlueColor
-            fixAllBtn.layer.cornerRadius = 14
-            fixAllBtn.contentEdgeInsets = UIEdgeInsets(top: 5, left: 12, bottom: 5, right: 12)
-            fixAllBtn.addAction(UIAction { [weak self] _ in
+            let fixAllCard = UIButton(type: .custom)
+            fixAllCard.setTitle("✨ Fix All: \"\(fullFix)\"", for: .normal)
+            fixAllCard.setTitleColor(.white, for: .normal)
+            fixAllCard.titleLabel?.font = UIFont.systemFont(ofSize: 13, weight: .bold)
+            fixAllCard.backgroundColor = grammarlyBlue
+            fixAllCard.layer.cornerRadius = 14
+            fixAllCard.contentEdgeInsets = UIEdgeInsets(top: 5, left: 12, bottom: 5, right: 12)
+            fixAllCard.addAction(UIAction { [weak self] _ in
                 self?.applyFullSentenceFix(original: sentence, replacement: fullFix)
             }, for: .touchUpInside)
-            suggestionsStackView.addArrangedSubview(fixAllBtn)
+            suggestionsStackView.addArrangedSubview(fixAllCard)
         }
 
-        // 2. Individual Word Fix Chips
+        // 2. Individual Grammarly Suggestion Cards (Strikethrough Red -> Green Replacement)
         for item in suggestions {
-            addSuggestionChip(original: item.original, replacement: item.replacement)
+            addSuggestionCard(original: item.original, replacement: item.replacement)
         }
     }
 
-    private func addToneButton(title: String, tone: String? = nil, isHeader: Bool = false) {
-        let btn = UIButton(type: .custom)
-        btn.setTitle(title, for: .normal)
-        btn.setTitleColor(isHeader ? UIColor(red: 0.5, green: 0.9, blue: 0.6, alpha: 1.0) : UIColor(white: 0.85, alpha: 1.0), for: .normal)
-        btn.titleLabel?.font = UIFont.systemFont(ofSize: 12.5, weight: isHeader ? .bold : .medium)
-        btn.backgroundColor = isHeader ? UIColor(white: 0.18, alpha: 0.6) : UIColor(white: 0.22, alpha: 1.0)
-        btn.layer.cornerRadius = 13
-        btn.layer.borderWidth = 0.8
-        btn.layer.borderColor = UIColor(white: 0.32, alpha: 1.0).cgColor
-        btn.contentEdgeInsets = UIEdgeInsets(top: 4, left: 10, bottom: 4, right: 10)
+    private func addTonePill(title: String, tone: String? = nil, isStatic: Bool = false) {
+        let pill = UIButton(type: .custom)
+        pill.setTitle(title, for: .normal)
+        pill.setTitleColor(isStatic ? grammarlyGreen : UIColor(white: 0.88, alpha: 1.0), for: .normal)
+        pill.titleLabel?.font = UIFont.systemFont(ofSize: 12.5, weight: isStatic ? .bold : .medium)
+        pill.backgroundColor = isStatic ? UIColor(white: 0.18, alpha: 0.7) : UIColor(white: 0.22, alpha: 1.0)
+        pill.layer.cornerRadius = 13
+        pill.layer.borderWidth = 0.8
+        pill.layer.borderColor = isStatic ? grammarlyGreen.withAlphaComponent(0.4).cgColor : UIColor(white: 0.32, alpha: 1.0).cgColor
+        pill.contentEdgeInsets = UIEdgeInsets(top: 4, left: 10, bottom: 4, right: 10)
 
         if let tone = tone {
-            btn.addAction(UIAction { [weak self] _ in
+            pill.addAction(UIAction { [weak self] _ in
                 self?.requestToneRewrite(tone: tone)
             }, for: .touchUpInside)
         }
 
-        suggestionsStackView.addArrangedSubview(btn)
+        suggestionsStackView.addArrangedSubview(pill)
     }
 
-    private func addSuggestionChip(original: String, replacement: String) {
-        let chip = UIButton(type: .custom)
-        chip.setTitle("❌ \(original) ➔ ✅ \(replacement)", for: .normal)
-        chip.setTitleColor(.white, for: .normal)
-        chip.titleLabel?.font = UIFont.systemFont(ofSize: 12.5, weight: .bold)
-        chip.backgroundColor = UIColor(red: 0.20, green: 0.24, blue: 0.32, alpha: 1.0)
-        chip.layer.cornerRadius = 13
-        chip.layer.borderWidth = 1.0
-        chip.layer.borderColor = UIColor(red: 0.30, green: 0.60, blue: 1.0, alpha: 0.7).cgColor
-        chip.contentEdgeInsets = UIEdgeInsets(top: 4, left: 10, bottom: 4, right: 10)
+    private func addSuggestionCard(original: String, replacement: String) {
+        let card = UIButton(type: .custom)
+        
+        // Exact Grammarly-style visual: Red wrong -> Green fix
+        let normalText = "\(original)  ➔  \(replacement)"
+        let attr = NSMutableAttributedString(string: normalText)
+        if let range = normalText.range(of: original) {
+            let nsRange = NSRange(range, in: normalText)
+            attr.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: nsRange)
+            attr.addAttribute(.foregroundColor, value: grammarlyCoral, range: nsRange)
+        }
+        if let range = normalText.range(of: replacement) {
+            let nsRange = NSRange(range, in: normalText)
+            attr.addAttribute(.foregroundColor, value: grammarlyGreen, range: nsRange)
+            attr.addAttribute(.font, value: UIFont.systemFont(ofSize: 13, weight: .bold), range: nsRange)
+        }
+        
+        card.setAttributedTitle(attr, for: .normal)
+        card.backgroundColor = UIColor(red: 0.18, green: 0.20, blue: 0.25, alpha: 1.0)
+        card.layer.cornerRadius = 13
+        card.layer.borderWidth = 1.0
+        card.layer.borderColor = grammarlyGreen.withAlphaComponent(0.6).cgColor
+        card.contentEdgeInsets = UIEdgeInsets(top: 4, left: 10, bottom: 4, right: 10)
 
-        chip.addAction(UIAction { [weak self] _ in
+        card.addAction(UIAction { [weak self, weak card] _ in
             self?.applyWordCorrection(original: original, replacement: replacement)
+            if let card = card {
+                self?.suggestionsStackView.removeArrangedSubview(card)
+                card.removeFromSuperview()
+                if self?.suggestionsStackView.arrangedSubviews.isEmpty == true {
+                    self?.setLogoState(mode: .clean)
+                    self?.showDefaultAssistantPrompt()
+                }
+            }
         }, for: .touchUpInside)
 
-        suggestionsStackView.addArrangedSubview(chip)
+        suggestionsStackView.addArrangedSubview(card)
     }
 
     // MARK: - Replacement Actions
@@ -797,6 +989,24 @@ class KeyboardViewController: UIInputViewController {
 
             notificationHaptic.notificationOccurred(.success)
             debounceAnalysis(immediate: true)
+        } else {
+            // Trimmed fallback
+            let trimmed = original.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let trimmedRange = context.range(of: trimmed, options: [.backwards, .caseInsensitive]) {
+                let distance = context.distance(from: trimmedRange.upperBound, to: context.endIndex)
+                if distance > 0 {
+                    textDocumentProxy.adjustTextPosition(byCharacterOffset: -distance)
+                }
+                for _ in 0..<trimmed.count {
+                    textDocumentProxy.deleteBackward()
+                }
+                textDocumentProxy.insertText(replacement)
+                if distance > 0 {
+                    textDocumentProxy.adjustTextPosition(byCharacterOffset: distance)
+                }
+                notificationHaptic.notificationOccurred(.success)
+                debounceAnalysis(immediate: true)
+            }
         }
     }
 
